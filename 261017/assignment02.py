@@ -49,7 +49,7 @@ mask_enhanced = cv2.inRange(basketball_enhanced_lab, lower_basketball_lab, upper
 #     closing_iterations=(1,10,1)
 # )
 
-# opening_iteration=5, closingd_iteration=4에서 최적인 것 같음
+# opening_iteration=5, closing_iteration=4에서 최적인 것 같음
 
 kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))  # 5x5 원형 커널: 각 픽셀 주변을 원 모양 범위로 보고 연산 -> 결과 영역의 모서리가 둥글게 나옴
 
@@ -59,7 +59,7 @@ ball_mask_opened = cv2.morphologyEx(mask_enhanced, cv2.MORPH_OPEN, kernel, itera
 ball_mask_closed = cv2.morphologyEx(ball_mask_opened, cv2.MORPH_CLOSE, kernel, iterations=4)
 
 final_ball_mask = ball_mask_closed
-final_img = basketball.copy()
+final_img = basketball_rgb.copy()
 
 contours, _ = cv2.findContours(
     final_ball_mask, # binary mask
@@ -74,8 +74,9 @@ if len(contours) > 0:
     alpha = 0.35
     final_img = cv2.addWeighted(final_img, 1.0, mask_color, alpha, 0)
 
-    # Contour 그리기 (초록색 외곽선)
-    cv2.drawContours(final_img, contours, -1, (0,255,0), 2)
+    # Contour 그리기 (초록색 외곽선) - 가장 큰 외곽선만 선택
+    largest_contour = max(contours, key=cv2.contourArea)
+    cv2.drawContours(final_img, [largest_contour], -1, (0,255,0), 2)
 
 
 plt.imshow(final_img)

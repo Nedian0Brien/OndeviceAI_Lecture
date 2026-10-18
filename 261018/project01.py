@@ -1,4 +1,4 @@
-"""엄지와 손가락 마디의 영상상 접촉으로 입력하는 천지인 키보드.
+"""엄지로 자모를 선택하고 주먹으로 확정하는 천지인 키보드.
 
 실행: python 261018/project01.py
 카메라 없이 조합 확인: python 261018/project01.py --demo
@@ -13,7 +13,7 @@ from pathlib import Path
 import time
 from typing import Optional
 
-from cheonjiin import CheonjiinIME, TouchGate
+from cheonjiin import CheonjiinIME, FistGate
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -74,6 +74,29 @@ def contact_geometry(landmarks, width, height, ratio):
     return points, targets, candidate, released
 
 
+def classify_hand_pose(landmarks, width, height):
+    """practice의 관절 각도에 손끝-뿌리 거리를 더해 편 손/접는 중/주먹을 구분한다."""
+    points = [(p.x * width, p.y * height, getattr(p, "z", 0.0) * width) for p in landmarks]
+    extended = curled = 0
+    for base in (5, 9, 13, 17):
+        mcp, pip, dip, tip = points[base:base + 4]
+        first = tuple(a - b for a, b in zip(mcp, pip))
+        second = tuple(a - b for a, b in zip(dip, pip))
+        length1, length2 = math.dist(mcp, pip), math.dist(dip, pip)
+        if min(length1, length2) < 2:
+            continue
+        cosine = sum(a * b for a, b in zip(first, second)) / (length1 * length2)
+        angle = math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+        reach = math.dist(tip, mcp) / length1
+        extended += angle >= 150 and reach >= 1.6
+        curled += angle <= 135 and reach <= 1.7
+    if curled >= 3 and extended == 0:
+        return "fist"
+    if extended >= 3 and curled == 0:
+        return "open"
+    return "closing"
+
+
 @dataclass
 class HandView:
     label: str
@@ -81,26 +104,32 @@ class HandView:
     targets: list
     candidate: Optional[str]
     nearest: Optional[str]
-    gate: TouchGate
+    gate: FistGate
     last_press: tuple = (None, float("-inf"))
     focus: dict = field(default_factory=dict)
+    pose: str = "open"
+    confirmed_label: str = ""
+    pending_label: str = ""
 
 
 class HandKeyboardTracker:
-    """왼손·오른손의 접촉/해제 상태를 각각 유지한다. auto는 both와 같은 동작이다."""
+    """왼손·오른손의 선택/주먹 확정 상태를 각각 유지한다."""
 
-    def __init__(self, mode="both", dwell=0.12, release=0.10):
+    def __init__(self, mode="both", dwell=0.12, release=0.10, fist_hold=0.18):
         self.mode = "both" if mode == "auto" else mode
-        self.gates = {label: TouchGate(dwell, release) for label in ("Left", "Right")}
+        self.gates = {label: FistGate(dwell, release, fist_hold) for label in ("Left", "Right")}
         self.last_press = {label: (None, float("-inf")) for label in self.gates}
+        self.confirmed_labels = {label: "" for label in self.gates}
+        self.pending = {label: None for label in self.gates}
         self.focus = {label: {} for label in self.gates}
         self.last_time = None
 
     def reset(self):
-        for gate in self.gates.values():
+        for label, gate in self.gates.items():
             gate.lost()
+            self.pending[label] = None
 
-    def update(self, detections, width, height, ratio, now, enabled=True):
+    def update(self, detections, width, height, ratio, now, enabled=True, ime=None):
         detections = sorted(((label, landmarks) for label, landmarks in detections
                              if label in self.gates and (self.mode == "both" or label.lower() == self.mode)),
                             key=lambda detection: detection[0])
@@ -109,27 +138,38 @@ class HandKeyboardTracker:
             if counts[label] != 1:
                 gate.lost()
                 self.focus[label] = {}
+                self.pending[label] = None
         # 80ms의 짧은 보간으로 가까운 키의 확대가 프레임마다 튀지 않게 한다.
         blend = 1.0 if self.last_time is None else 1 - math.exp(-max(0, now - self.last_time) / 0.08)
         self.last_time = now
         views, events = [], []
         for label, landmarks in detections:
-            points, targets, candidate, released = contact_geometry(landmarks, width, height, ratio)
+            points, targets, candidate, _ = contact_geometry(landmarks, width, height, ratio)
             gate = self.gates[label]
+            pose = classify_hand_pose(landmarks, width, height)
             nearest = min(targets, key=lambda target: target[4])[0] if targets else None
-            self.focus[label] = {
-                key: self.focus[label].get(key, 0.0) + blend * ((1.0 if key == nearest else 0.0) - self.focus[label].get(key, 0.0))
-                for key, _, _, _, _ in targets
-            }
             if not enabled or not targets or counts[label] != 1:
                 gate.lost()
+                self.pending[label] = None
             else:
-                pressed = gate.update(candidate, released, now)
+                if pose == "open":
+                    self.pending[label] = None
+                elif gate.armed and gate.selected is not None and self.pending[label] is None and ime is not None:
+                    # 주먹을 접기 시작할 때 표시한 자모를 보존한다. 확정 중 순환 시간이
+                    # 지나거나 다른 손이 입력해도 이 손에서 고른 글자가 바뀌지 않는다.
+                    self.pending[label] = ime.prepare_key(gate.selected, now)
+                pressed = gate.update(nearest, pose, now)
                 if pressed:
                     self.last_press[label] = (pressed, now)
                     events.append((label, pressed))
+            focus_key = nearest if pose == "open" else gate.selected
+            self.focus[label] = {
+                key: self.focus[label].get(key, 0.0) + blend * ((1.0 if key == focus_key else 0.0) - self.focus[label].get(key, 0.0))
+                for key, _, _, _, _ in targets
+            }
             views.append(HandView(label, points, targets, candidate, nearest, gate,
-                                  self.last_press[label], self.focus[label]))
+                                  self.last_press[label], self.focus[label], pose, self.confirmed_labels[label],
+                                  self.pending[label].label if self.pending[label] is not None else ""))
         return views, events
 
 
@@ -138,6 +178,11 @@ def key_diameter(targets, points, index, focus, scale):
                    if other != index), default=40 * scale)
     base = max(18 * scale, min(32 * scale, spacing * 0.78))
     return base * (1 + 0.30 * focus)
+
+
+def palm_center(points):
+    return tuple((points[0][axis] + sum(points[index][axis] for index in (5, 9, 13, 17)) / 4) / 2
+                 for axis in (0, 1))
 
 
 def find_font(requested):
@@ -226,7 +271,7 @@ def hud_text_sprite(text, font, fill, anchor, stroke_width, stroke_fill):
 
 
 def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False, show_mask=False,
-            show_help=False, notice_since=None):
+            show_help=False, notice_since=None, fist_hold=0.18):
     """영상 위 작은 원형 유리 키와 한 줄 입력 캡슐을 합성한다."""
     import cv2
     import numpy as np
@@ -269,7 +314,7 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
             draw.rounded_rectangle(bounds, radius=radius, fill=fill, outline=edge, width=stroke)
 
     # 한 줄만 보이는 입력 캡슐. 전체 텍스트는 조합기에 유지하고 저장한다.
-    text = ime.text.split("\n")[-1] if ime.text else "엄지로 눌러 입력"
+    text = ime.text.split("\n")[-1] if ime.text else "엄지로 선택 · 주먹으로 입력"
     input_font = large if ime.text else normal
     available = min(w - 2 * margin, 460 * scale) - 36 * scale
     if hud_text_width(text, input_font) > available:
@@ -309,6 +354,8 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
 
     for hand in hands:
         points = hand.points
+        if hand.pose != "open":
+            continue
         # 확대된 키가 이웃 키에 가려지지 않도록 마지막에 그린다.
         for key, label, index, _, _ in sorted(hand.targets, key=lambda target: hand.focus.get(target[0], 0.0)):
             x, y = points[index]
@@ -328,10 +375,30 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
                 key_font = hud_font(fonts[1], size)
             ink = (28, 29, 34, 255) if recent else (muted if paused else white)
             write((cx, cy), display, anchor="mm", font=key_font, fill=ink)
-            if key == hand.candidate and hand.gate.armed and hand.gate.progress > 0 and not paused and not show_help:
-                r = diameter / 2 + 2 * scale
-                draw.arc((cx - r, cy - r, cx + r, cy + r), -90, -90 + 360 * hand.gate.progress,
-                         fill=white, width=max(1, round(2 * scale)))
+
+    # 선택한 자모를 손바닥 한가운데 표시한다. 주먹 확정 후에는 실제 입력 글자를 유지한다.
+    for hand in hands:
+        key = hand.gate.selected or (hand.gate.candidate if hand.pose == "open" else None)
+        if key is None or not hand.targets:
+            continue
+        points = hand.points
+        cx, cy = palm_center(points)
+        palm_size = max(math.dist(points[5], points[17]), math.dist(points[0], points[9]))
+        diameter = min(62 * scale, max(40 * scale, palm_size * 0.38))
+        cx = min(max(cx, diameter / 2 + 3), w - diameter / 2 - 3)
+        cy = min(max(cy, diameter / 2 + 3), h - diameter / 2 - 3)
+        recent = 0 <= now - hand.last_press[1] < 0.28
+        confirmed = hand.gate.phase == "held" and hand.confirmed_label
+        glyph = hand.confirmed_label if confirmed else (hand.pending_label or ime.preview_label(key, now))
+        bounds = (cx - diameter / 2, cy - diameter / 2, cx + diameter / 2, cy + diameter / 2)
+        glass(bounds, circle=True, hover=hand.gate.selected is not None, pressed=recent)
+        font = hud_font(fonts[2], max(10, round(diameter * (0.42 if len(glyph) == 1 else 0.29))))
+        ink = (28, 29, 34, 255) if recent else (white if hand.gate.selected else muted)
+        write((cx, cy), glyph, anchor="mm", font=font, fill=ink)
+        if hand.gate.progress > 0 and not paused and not show_help:
+            r = diameter / 2 + 3 * scale
+            draw.arc((cx - r, cy - r, cx + r, cy + r), -90, -90 + 360 * hand.gate.progress,
+                     fill=white, width=max(2, round(2 * scale)))
 
     for hand in hands:
         x, y = hand.points[4]
@@ -349,7 +416,9 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
     elif not any(hand.targets for hand in hands):
         message = "손을 더 가까이" if hands else "손바닥을 보여주세요"
     elif not any(hand.gate.armed for hand in hands if hand.targets):
-        message = "엄지를 떼세요"
+        message = "손을 펴세요"
+    elif any(hand.gate.selected for hand in hands):
+        message = "주먹을 쥐면 입력"
     if notice_since is not None and now - notice_since < 2.5 and status.startswith("저장"):
         message = status
     if message and not show_help:
@@ -369,13 +438,13 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
                                outline=(255, 255, 255, 65), width=stroke)
         help_lines = (
             "손마디 천지인",
-            "엄지를 유지해 입력하고, 떼어 다음 키를 입력하세요.",
+            "엄지로 선택 → 손바닥 글자 확인 → 주먹으로 입력",
             "같은 자음 키를 빠르게 반복하면 다음 자음으로 바뀝니다.",
             "1~9 / 0 자판 테스트    - 공백    = 지움",
             "Tab 확정    Enter 줄바꿈    P 일시정지",
-            "E 보정    M 피부색 영역    [ ] 접촉 범위",
+            "E 보정    M 피부색 영역    [ ] 주먹 유지 시간",
             "S 저장    Q / Esc 종료    H 도움말 닫기",
-            f"접촉 {ratio:.2f} · 보정 {'ON' if enhanced else 'OFF'} · 영역 {'ON' if show_mask else 'OFF'} · {fps:.0f} FPS",
+            f"주먹 {fist_hold:.2f}초 · 보정 {'ON' if enhanced else 'OFF'} · 영역 {'ON' if show_mask else 'OFF'} · {fps:.0f} FPS",
             " / ".join("오른손" if hand.label == "Right" else "왼손" for hand in hands) + f" · 전체 입력 {len(ime.text)}자",
         )
         for i, text in enumerate(help_lines):
@@ -422,15 +491,16 @@ def run(args):
     )
     capture = None
     ime = CheonjiinIME(args.cycle)
-    keyboards = HandKeyboardTracker(args.hand, args.dwell, args.release)
+    keyboards = HandKeyboardTracker(args.hand, args.dwell, args.release, args.fist_hold)
     ratio = args.touch_ratio
+    fist_hold = args.fist_hold
     enhanced = args.enhance
     show_mask = args.show_mask
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     paused = False
     show_help = False
     notice_since = None
-    status = "키를 누른 뒤 떼어야 다시 입력됩니다"
+    status = "엄지로 고른 뒤 주먹을 쥐어 입력하세요"
     timestamp = -1
     previous_frame = time.monotonic()
     fps = 0.0
@@ -473,16 +543,23 @@ def run(args):
                     # handedness 점수는 좌/우 분류 확신도이며 손 검출 확신도가 아니다.
                     # 검출된 오른손을 추가 점수 임계값으로 누락시키지 않는다.
                     detections.append((label, landmarks))
-                hands, events = keyboards.update(detections, w, h, ratio, now, enabled=not paused and not show_help)
+                hands, events = keyboards.update(detections, w, h, ratio, now,
+                                                enabled=not paused and not show_help, ime=ime)
                 for label, pressed in events:
-                    ime.press(pressed, now)
-                    status = ("오른손" if label == "Right" else "왼손") + " 입력: " + KEY_LABELS[pressed]
+                    prepared = keyboards.pending[label]
+                    glyph = prepared.label if prepared is not None else ime.preview_label(pressed, now)
+                    ime.press(pressed, now, prepared=prepared)
+                    keyboards.confirmed_labels[label] = glyph
+                    for hand in hands:
+                        if hand.label == label:
+                            hand.confirmed_label = glyph
+                    status = ("오른손" if label == "Right" else "왼손") + " 입력: " + glyph
                 if show_mask:
                     for hand in hands:
                         if hand.targets:
                             frame = skin_overlay(frame, hand.points)
                 view = draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused,
-                               enhanced, show_mask, show_help, notice_since)
+                               enhanced, show_mask, show_help, notice_since, fist_hold)
                 cv2.imshow("Hand Cheonjiin", view)
                 key_code = cv2.waitKey(1) & 0xFF
                 if key_code in (27, ord("q"), ord("Q")):
@@ -524,10 +601,14 @@ def run(args):
                         print("저장 실패:", exc)
                     notice_since = now
                 elif char == "[":
-                    ratio = max(0.05, round(ratio - 0.01, 2))
+                    fist_hold = max(0.08, round(fist_hold - 0.02, 2))
+                    for gate in keyboards.gates.values():
+                        gate.hold = fist_hold
                     keyboards.reset()
                 elif char == "]":
-                    ratio = min(0.35, round(ratio + 0.01, 2))
+                    fist_hold = min(1.0, round(fist_hold + 0.02, 2))
+                    for gate in keyboards.gates.values():
+                        gate.hold = fist_hold
                     keyboards.reset()
     finally:
         if capture is not None:
@@ -557,9 +638,10 @@ def main():
     parser.add_argument("--flip-vertical", action="store_true", help="거꾸로 설치된 카메라 상하 반전")
     parser.add_argument("--enhance", action="store_true", help="LAB/CLAHE 명도 보정과 Gaussian 필터 사용")
     parser.add_argument("--show-mask", action="store_true", help="손 주변 피부색 분할 영역과 윤곽선 표시")
-    parser.add_argument("--touch-ratio", type=positive_float, default=0.16, help="손바닥 대비 접촉 반경")
-    parser.add_argument("--dwell", type=positive_float, default=0.12, help="접촉 유지 시간 (초)")
-    parser.add_argument("--release", type=positive_float, default=0.10, help="다시 누르기 전 떼는 시간 (초)")
+    parser.add_argument("--touch-ratio", type=positive_float, default=0.16, help="기하 진단용 접촉 반경 (주먹 입력에는 영향 없음)")
+    parser.add_argument("--dwell", type=positive_float, default=0.12, help="가까운 키를 선택하는 유지 시간 (초)")
+    parser.add_argument("--release", type=positive_float, default=0.10, help="재입력 전 손을 펴는 유지 시간 (초)")
+    parser.add_argument("--fist-hold", type=positive_float, default=0.18, help="입력 확정에 필요한 주먹 유지 시간 (초)")
     parser.add_argument("--cycle", type=positive_float, default=0.85, help="같은 자음 키를 순환하는 시간 (초)")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().with_name("project01_output.txt"))
     parser.add_argument("--demo", action="store_true", help="카메라/외부 패키지 없이 '안녕하세요' 조합 시연")

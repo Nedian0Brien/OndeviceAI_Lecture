@@ -4,8 +4,8 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from cheonjiin import CheonjiinIME, CONSONANTS, MEDIALS, TouchGate
-from project01 import HandKeyboardTracker, contact_geometry, is_window_closed, key_diameter, key_layout
+from cheonjiin import CheonjiinIME, CONSONANTS, MEDIALS, TouchGate, FistGate
+from project01 import HandKeyboardTracker, classify_hand_pose, contact_geometry, is_window_closed, key_diameter, key_layout
 
 
 class IMETests(unittest.TestCase):
@@ -200,12 +200,17 @@ class WindowTests(unittest.TestCase):
 
 class HandKeyboardTests(unittest.TestCase):
     @staticmethod
-    def hand(contact=False, mirrored=False):
+    def hand(contact=False, mirrored=False, fist=False, key="1"):
         landmarks = GeometryTests.hand()
+        if fist:
+            for base in (5, 9, 13, 17):
+                x = landmarks[base].x
+                landmarks[base + 2] = SimpleNamespace(x=x, y=.68)
+                landmarks[base + 3] = SimpleNamespace(x=x, y=.73)
         if mirrored:
             landmarks = [SimpleNamespace(x=1 - p.x, y=p.y) for p in landmarks]
         if contact:
-            index = next(index for key, _, index in key_layout(landmarks) if key == "1")
+            index = next(index for actual, _, index in key_layout(landmarks) if actual == key)
             landmarks[4] = SimpleNamespace(x=landmarks[index].x, y=landmarks[index].y)
         else:
             landmarks[4] = SimpleNamespace(x=0.0, y=0.0)
@@ -226,6 +231,9 @@ class HandKeyboardTests(unittest.TestCase):
             tracker.update([("Right", self.hand(mirrored=True))], 640, 480, .16, now)
         tracker.update([("Right", self.hand(contact=True, mirrored=True))], 640, 480, .16, .2)
         _, events = tracker.update([("Right", self.hand(contact=True, mirrored=True))], 640, 480, .16, .34)
+        self.assertEqual(events, [])  # 손가락에 엄지를 대기만 해서는 입력되지 않는다.
+        for now in (.4, .6):
+            _, events = tracker.update([("Right", self.hand(mirrored=True, fist=True))], 640, 480, .16, now)
         self.assertEqual(events, [("Right", "1")])
 
     def test_hands_have_independent_release_and_detection_order(self):
@@ -235,14 +243,18 @@ class HandKeyboardTests(unittest.TestCase):
         for now in (.2, .34):
             views, events = tracker.update([("Right", self.hand(mirrored=True)), ("Left", self.hand(contact=True))],
                                            640, 480, .16, now)
+        self.assertEqual(events, [])
+        for now in (.4, .6):
+            _, events = tracker.update([("Right", self.hand(mirrored=True)), ("Left", self.hand(fist=True))],
+                                       640, 480, .16, now)
         self.assertEqual(events, [("Left", "1")])
         self.assertTrue(tracker.gates["Right"].armed)
         self.assertFalse(tracker.gates["Left"].armed)
-        for now in (.4, .54):
-            _, events = tracker.update([("Left", self.hand(contact=True)), ("Right", self.hand(contact=True, mirrored=True))],
+        for now in (.7, .9):
+            _, events = tracker.update([("Left", self.hand(fist=True)), ("Right", self.hand(fist=True, mirrored=True))],
                                        640, 480, .16, now)
         self.assertEqual(events, [("Right", "1")])
-        self.assertEqual(tracker.last_press["Left"], ("1", .34))
+        self.assertEqual(tracker.last_press["Left"], ("1", .6))
 
     def test_hand_loss_requires_release_when_it_returns(self):
         tracker = HandKeyboardTracker()
@@ -250,7 +262,7 @@ class HandKeyboardTests(unittest.TestCase):
             tracker.update([("Right", self.hand(mirrored=True))], 640, 480, .16, now)
         tracker.update([], 640, 480, .16, .2)
         for now in (.3, 1.0):
-            _, events = tracker.update([("Right", self.hand(contact=True, mirrored=True))], 640, 480, .16, now)
+            _, events = tracker.update([("Right", self.hand(fist=True, mirrored=True))], 640, 480, .16, now)
             self.assertEqual(events, [])
 
     def test_explicit_hand_filter(self):
@@ -263,13 +275,14 @@ class HandKeyboardTests(unittest.TestCase):
 
     def test_nearest_key_highlights_before_contact_without_typing(self):
         tracker = HandKeyboardTracker()
-        for now in (0.0, .11):
+        for now in (0.0, .11, .2):
             tracker.update([("Right", self.hand())], 640, 480, .16, now)
         views, events = tracker.update([("Right", self.hand())], 640, 480, .16, .5)
         hand = views[0]
         self.assertTrue(hand.gate.armed)
         self.assertIsNone(hand.candidate)
         self.assertIsNotNone(hand.nearest)
+        self.assertEqual(hand.gate.selected, hand.nearest)
         self.assertEqual(events, [])
         self.assertEqual(hand.focus[hand.nearest], 1.0)
         _, _, index, _, _ = next(t for t in hand.targets if t[0] == hand.nearest)
@@ -293,9 +306,125 @@ class HandKeyboardTests(unittest.TestCase):
             tracker.update([("Left", self.hand()), ("Right", self.hand(mirrored=True))], 640, 480, .16, now)
         tracker.reset()
         for now in (.2, .5):
-            _, events = tracker.update([("Left", self.hand(contact=True)), ("Right", self.hand(contact=True, mirrored=True))],
+            _, events = tracker.update([("Left", self.hand(fist=True)), ("Right", self.hand(fist=True, mirrored=True))],
                                        640, 480, .16, now)
             self.assertEqual(events, [])
+
+    def test_preview_latches_when_fist_starts_and_survives_cycle_timeout(self):
+        tracker = HandKeyboardTracker()
+        ime = CheonjiinIME()
+        ime.press("4", 0.0)
+        for now in (.1, .21, .3, .44):
+            tracker.update([("Right", self.hand(contact=True, mirrored=True, key="4"))],
+                           640, 480, .16, now, ime=ime)
+        views, _ = tracker.update([("Right", self.hand(mirrored=True, fist=True))],
+                                  640, 480, .16, .8, ime=ime)
+        self.assertEqual(views[0].pending_label, "ㅋ")
+        _, events = tracker.update([("Right", self.hand(mirrored=True, fist=True))],
+                                   640, 480, .16, 1.0, ime=ime)
+        self.assertEqual(events, [("Right", "4")])
+        ime.press("4", 1.0, prepared=tracker.pending["Right"])
+        self.assertEqual(ime.text, "ㅋ")
+
+
+class FistTests(unittest.TestCase):
+    def setUp(self):
+        self.gate = FistGate()
+
+    def select(self, key="4", start=0.0):
+        for delta in (0.0, .11, .2, .34):
+            self.assertIsNone(self.gate.update(key, "open", start + delta))
+        self.assertEqual(self.gate.selected, key)
+
+    def test_starting_with_fist_does_not_type(self):
+        for now in (0.0, .5, 2.0):
+            self.assertIsNone(self.gate.update("4", "fist", now))
+        self.assertIsNone(self.gate.selected)
+
+    def test_selecting_and_holding_open_never_types(self):
+        self.select()
+        self.assertIsNone(self.gate.update("4", "open", 10.0))
+        self.assertTrue(self.gate.armed)
+
+    def test_selection_is_frozen_during_closing(self):
+        self.select("4")
+        self.gate.update("9", "closing", .4)
+        self.assertEqual(self.gate.selected, "4")
+        self.gate.update("0", "fist", .5)
+        self.assertEqual(self.gate.update("BACK", "fist", .7), "4")
+
+    def test_held_fist_fires_once_until_opened_again(self):
+        self.select()
+        self.gate.update("1", "fist", .4)
+        self.assertEqual(self.gate.update("1", "fist", .6), "4")
+        self.assertIsNone(self.gate.update("1", "fist", 5.0))
+        self.assertIsNone(self.gate.update("1", "closing", 6.0))
+        self.select("2", start=7.0)
+        self.gate.update("9", "fist", 7.4)
+        self.assertEqual(self.gate.update("9", "fist", 7.6), "2")
+
+    def test_fist_must_be_continuous(self):
+        self.select()
+        self.gate.update("4", "fist", .4)
+        self.gate.update("4", "closing", .5)
+        self.gate.update("4", "fist", .6)
+        self.assertIsNone(self.gate.update("4", "fist", .7))
+        self.assertEqual(self.gate.update("4", "fist", .8), "4")
+
+    def test_loss_forgets_selection_and_requires_open_hand(self):
+        self.select()
+        self.gate.lost()
+        self.assertIsNone(self.gate.update("4", "fist", 2.0))
+        self.assertIsNone(self.gate.update("4", "fist", 3.0))
+        self.assertIsNone(self.gate.selected)
+
+    def test_changing_key_before_stable_selection_does_not_commit_old_key(self):
+        self.select("4")
+        self.gate.update("5", "open", .4)
+        self.assertIsNone(self.gate.selected)
+        self.gate.update("5", "fist", .5)
+        self.assertIsNone(self.gate.update("5", "fist", 1.0))
+
+    def test_jamo_preview_follows_consonant_cycle_without_editing(self):
+        ime = CheonjiinIME()
+        self.assertEqual(ime.preview_label("4", 0.0), "ㄱ")
+        self.assertEqual(ime.text, "")
+        ime.press("4", 0.0)
+        self.assertEqual(ime.preview_label("4", .5), "ㅋ")
+        self.assertEqual(ime.text, "ㄱ")
+        self.assertEqual(ime.preview_label("4", 2.0), "ㄱ")
+        self.assertEqual(ime.preview_label("2", .5), "ㆍ")
+        self.assertEqual(ime.preview_label("BACK", .5), "지움")
+
+    def test_prepared_character_does_not_change_after_other_hand_edits(self):
+        ime = CheonjiinIME()
+        ime.press("4", 0.0)
+        prepared = ime.prepare_key("4", .3)
+        ime.press("SPACE", .4)
+        ime.press("4", 1.0, prepared=prepared)
+        self.assertEqual(ime.text, "ㄱ ㅋ")
+        ime.backspace()
+        self.assertEqual(ime.text, "ㄱ ")
+
+
+class PoseTests(unittest.TestCase):
+    def test_open_and_fist_for_both_hands_and_camera_sizes(self):
+        for mirrored in (False, True):
+            for width, height in ((640, 480), (1280, 720)):
+                with self.subTest(mirrored=mirrored, size=(width, height)):
+                    self.assertEqual(classify_hand_pose(HandKeyboardTests.hand(mirrored=mirrored), width, height), "open")
+                    self.assertEqual(classify_hand_pose(HandKeyboardTests.hand(mirrored=mirrored, fist=True), width, height), "fist")
+
+    def test_partial_curl_is_not_a_fist(self):
+        opened = HandKeyboardTests.hand()
+        closed = HandKeyboardTests.hand(fist=True)
+        for base in (5, 9, 13):
+            opened[base:base + 4] = closed[base:base + 4]
+        self.assertEqual(classify_hand_pose(opened, 640, 480), "closing")
+
+    def test_degenerate_points_do_not_look_like_a_fist(self):
+        points = [SimpleNamespace(x=.5, y=.5) for _ in range(21)]
+        self.assertEqual(classify_hand_pose(points, 640, 480), "closing")
 
 
 class GeometryTests(unittest.TestCase):

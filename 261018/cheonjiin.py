@@ -1,4 +1,4 @@
-"""카메라와 분리한 천지인 조합기와 접촉 입력 상태 머신 (표준 라이브러리만 사용)."""
+"""카메라와 분리한 천지인 조합기와 제스처 상태 머신 (표준 라이브러리만 사용)."""
 
 from dataclasses import dataclass
 from typing import Optional
@@ -35,6 +35,14 @@ class Token:
     kind: str
     value: str
     key: str = ""
+
+
+@dataclass
+class PreparedKey:
+    key: str
+    label: str
+    target: Optional[Token] = None
+    before: str = ""
 
 
 @dataclass
@@ -112,7 +120,27 @@ class CheonjiinIME:
         last = self.tokens[-1] if self.tokens else None
         self.history.append(UndoEdit(len(self.tokens), Token(last.kind, last.value, last.key) if last else None))
 
-    def press(self, key, now):
+    def preview_label(self, key, now):
+        """문장을 바꾸지 않고 다음 입력에서 선택될 자모 한 개를 알려준다."""
+        if key in CONSONANTS:
+            group = CONSONANTS[key]
+            if (self.tokens and self.tokens[-1].kind == "C" and self.last_key == key
+                    and 0 <= now - self.last_time <= self.cycle_seconds):
+                return group[(group.index(self.tokens[-1].value) + 1) % len(group)]
+            return group[0]
+        return {"1": "ㅣ", "2": "ㆍ", "3": "ㅡ", "SPACE": "공백", "BACK": "지움"}.get(key, "")
+
+    def prepare_key(self, key, now):
+        label = self.preview_label(key, now)
+        target = None
+        if (key in CONSONANTS and self.tokens and self.tokens[-1].kind == "C"
+                and self.last_key == key and 0 <= now - self.last_time <= self.cycle_seconds):
+            target = self.tokens[-1]
+        return PreparedKey(key, label, target, target.value if target is not None else "")
+
+    def press(self, key, now, prepared=None):
+        if prepared is not None and prepared.key != key:
+            raise ValueError("선택한 키와 확정할 키가 다릅니다.")
         if key == "BACK":
             self.backspace()
             return
@@ -120,13 +148,12 @@ class CheonjiinIME:
             raise ValueError("알 수 없는 키: " + key)
         self._remember()
         if key in CONSONANTS:
-            group = CONSONANTS[key]
-            if (self.tokens and self.tokens[-1].kind == "C" and self.last_key == key
-                    and 0 <= now - self.last_time <= self.cycle_seconds):
-                token = self.tokens[-1]
-                token.value = group[(group.index(token.value) + 1) % len(group)]
+            selection = prepared if prepared is not None else self.prepare_key(key, now)
+            if (selection.target is not None and self.tokens and self.tokens[-1] is selection.target
+                    and selection.target.value == selection.before):
+                self.tokens[-1].value = selection.label
             else:
-                self.tokens.append(Token("C", group[0], key))
+                self.tokens.append(Token("C", selection.label, key))
         elif key in VOWEL_KEYS:
             atom = VOWEL_KEYS[key]
             if (self.tokens and self.tokens[-1].kind == "V"
@@ -196,4 +223,57 @@ class TouchGate:
             self.armed = False
             self.candidate = self.since = self.release_since = None
             return key
+        return None
+
+
+class FistGate:
+    """편 손에서 키 선택 → 선택 고정 → 주먹 유지로 한 번 확정 → 손을 펴서 재준비."""
+
+    def __init__(self, dwell=0.12, release=0.10, hold=0.18):
+        self.dwell, self.release, self.hold = dwell, release, hold
+        self.lost()
+
+    def lost(self):
+        self.armed = False
+        self.selected = self.candidate = None
+        self.since = self.open_since = self.fist_since = None
+        self.progress = 0.0
+        self.phase = "waiting"
+
+    def update(self, key, pose, now):
+        self.progress = 0.0
+        if pose == "open":
+            self.fist_since = None
+            if not self.armed:
+                if self.open_since is None:
+                    self.open_since = now
+                if now - self.open_since >= self.release:
+                    self.armed = True
+                    self.selected = self.candidate = self.since = None
+                    self.phase = "selecting"
+                return None
+            self.phase = "selecting"
+            if key != self.candidate:
+                self.candidate, self.since = key, now
+                self.selected = None
+            if key is not None and now - self.since >= self.dwell:
+                self.selected = key
+            return None
+
+        # 접는 도중에는 엄지/마디가 움직여도 마지막 선택을 바꾸지 않는다.
+        self.open_since = None
+        self.candidate = self.since = None
+        if not self.armed:
+            return None
+        self.phase = "closing"
+        if pose != "fist" or self.selected is None:
+            self.fist_since = None
+            return None
+        if self.fist_since is None:
+            self.fist_since = now
+        self.progress = min(1.0, (now - self.fist_since) / self.hold)
+        if self.progress >= 1.0:
+            self.armed = False
+            self.phase = "held"
+            return self.selected
         return None

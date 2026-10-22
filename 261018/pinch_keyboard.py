@@ -6,6 +6,15 @@
 실행: python 261018/pinch_keyboard.py --camera 0
 """
 
+# 이전 시도 앱(방식 1, 2026-10-18). 입력은 되었지만, 맞은편 카메라 배치에서는 사용자 시점과 화면이 달라
+# 조작하기 어려웠다. 현재 주 버전은 pinch_cheonjiin.py다.
+#
+# 한 프레임의 처리 흐름 (PinchKeyboard.update)
+#   검출 → 자판 손 / 선택 손 배정 → 선택 손: 커서(엄지·검지 중점)와 꼬집기 비율
+#   → 자판 손: 마디 키 위치. 선택 손이 겹치거나 잠깐 사라지면 직전 위치를 유지한다.
+#   → 커서와 가장 가까운 키 강조 → 꼬집기(PinchGate)로 입력, 자판 손 주먹(FistHold)으로 지움
+# 키 배치와 화면은 엄지 마디 앱과 같은 common/hand_keys.py를 쓴다.
+
 import argparse
 from dataclasses import dataclass
 import math
@@ -13,42 +22,97 @@ from pathlib import Path
 import time
 from typing import Optional
 
-from cheonjiin import CheonjiinIME, FistHold
-from pinch_detect import PINCH_ENTER, PINCH_EXIT, PinchGate, pinch_cursor, pinch_ratio
-from project01 import (GSTREAMER, ROOT, HandView, classify_hand_pose, create_detector, detect_hands, draw_ui,
-                       find_font, is_window_closed, key_targets, open_capture, positive_float, read_frame)
+from korean_ime import CheonjiinIME
+from common.camera import FpsMeter, VideoClock, Window, open_capture, read_frame
+from common.cli import add_camera_arguments, positive_float, resolve_pipeline
+from common.gestures import FistHold
+from common.hand_keys import HandView, draw_ui, key_targets
+from common.hands import assign_hands, create_detector, detect_hands
+from common.hud import load_fonts
+from common.landmarks import MIDDLE_MCP, THUMB_TIP, WRIST, palm_size, to_pixels, xyz
+from common.pose import pose_from_image
 
 
-WINDOW = "Pinch Cheonjiin"
+WINDOW = "Pinch Keyboard"
 HOLD_KEYBOARD = 1.5  # 자판 손이 가려져 검출이 끊겨도 마지막 위치를 이 시간(초)까지 쓴다.
 SELECT_RADIUS = 0.30  # 커서가 키에서 손바닥 크기의 30% 안에 있어야 선택한다.
 SWITCH_MARGIN = 1.25  # 다른 키가 현재 키보다 1.25배 이상 가까워야 강조를 옮긴다.
+INDEX_TIP = 8
+# 꼬집기 비율(엄지 끝~검지 끝 / 손목~중지 뿌리)이 PINCH_ENTER 아래면 맞닿음, PINCH_EXIT 위로 벌려야 다음 입력.
+PINCH_ENTER, PINCH_EXIT = 0.30, 0.45
 
 
-def palm_size(points):
-    return max(math.dist(points[5], points[17]), math.dist(points[0], points[9]))
+# ---------------------------------------------------------------------------
+# 선택 손의 꼬집기 (한 손 안의 거리라 world 좌표를 그대로 쓴다)
+
+def pinch_ratio(world):
+    """엄지 끝~검지 끝 거리 / 손목~중지 뿌리 거리. 펴면 1 안팎, 맞닿으면 0에 가깝다."""
+    scale = math.dist(xyz(world[WRIST]), xyz(world[MIDDLE_MCP]))
+    return math.dist(xyz(world[THUMB_TIP]), xyz(world[INDEX_TIP])) / max(scale, 1e-6)
 
 
-def assign_roles(detections, keyboard_label, width):
-    """(자판 손, 선택 손) 검출을 고른다. 각 검출은 (라벨, 이미지 landmark, world landmark).
+def pinch_cursor(points):
+    """화면 좌표 (x, y) 목록에서 엄지 끝과 검지 끝의 중점. 맞닿는 순간 두 점이 이 자리로 모인다."""
+    (x1, y1), (x2, y2) = points[THUMB_TIP][:2], points[INDEX_TIP][:2]
+    return (x1 + x2) / 2, (y1 + y2) / 2
 
-    좌우 라벨이 서로 다르면 라벨로 정한다. 손등이 보이는 손은 라벨이 뒤집힐 수 있으므로 두 손이 같은
-    라벨이면 화면 위치로 정한다: 미러 영상에서 왼손 자판은 화면 왼쪽에 있다.
+
+class PinchGate:
+    """벌림(exit 이상) → 오므리기 시작(exit 아래)에서 키 고정 → enter 아래에서 한 번 입력 → 다시 벌려야 재입력.
+
+    오므리는 동안 커서가 움직여도 오므리기 시작할 때 고정한 키를 입력한다.
+    처음 보이는 손이나 유실 후 돌아온 손은 먼저 벌려야 한다.
     """
-    if not detections:
-        return None, None
-    if len(detections) == 1:
-        label = detections[0][0]
-        return (detections[0], None) if label == keyboard_label else (None, detections[0])
-    first, second = detections[:2]
-    if first[0] != second[0]:
-        return (first, second) if first[0] == keyboard_label else (second, first)
-    left, right = sorted((first, second), key=lambda d: sum(p.x for p in d[1]) / len(d[1]))
-    return (left, right) if keyboard_label == "Left" else (right, left)
+
+    def __init__(self, enter=PINCH_ENTER, exit=PINCH_EXIT):
+        if exit <= enter:
+            raise ValueError("exit는 enter보다 커야 합니다.")
+        self.enter, self.exit = enter, exit
+        self.lost()
+
+    def lost(self):
+        self.armed = False
+        self.closing = False
+        self.latched: Optional[str] = None  # 오므리기 시작할 때 강조돼 있던 키
+        self.ratio: Optional[float] = None
+
+    @property
+    def progress(self):
+        """오므린 정도 0~1. 화면 표시용."""
+        if self.ratio is None or not self.armed:
+            return 0.0
+        return min(1.0, max(0.0, (self.exit - self.ratio) / (self.exit - self.enter)))
+
+    def update(self, ratio, key):
+        """ratio: 꼬집기 비율, key: 지금 강조된 키. 맞닿은 프레임에서 고정해 둔 키를 돌려준다."""
+        self.ratio = ratio
+        if ratio >= self.exit:
+            self.armed, self.closing, self.latched = True, False, None
+            return None
+        if not self.armed:
+            return None
+        if not self.closing:
+            self.closing, self.latched = True, key
+        if ratio <= self.enter:
+            pressed = self.latched
+            self.armed, self.closing, self.latched = False, False, None
+            return pressed
+        return None
+
+
+# ---------------------------------------------------------------------------
+# 자판 손 + 선택 손
+
+def assign_roles(detections, keyboard_label):
+    """(자판 손, 선택 손) 검출. 없으면 None. 왼손·오른손 배정 규칙은 common.hands.assign_hands와 같다."""
+    hands = assign_hands(detections)
+    selector_label = "Right" if keyboard_label == "Left" else "Left"
+    return hands.get(keyboard_label), hands.get(selector_label)
 
 
 @dataclass
 class KeyboardCache:
+    """마지막으로 믿을 수 있었던 자판 손 키 위치."""
     points: list
     targets: list
     since: float
@@ -87,15 +151,18 @@ class PinchKeyboard:
         return nearest
 
     def update(self, detections, width, height, now, enabled=True):
-        """detections: (라벨, 이미지 landmark, world landmark). 반환: (손 화면 정보, 이벤트, 커서)."""
-        keyboard, selector = assign_roles(detections, self.keyboard_label, width)
+        """detections: (라벨, 이미지 landmark, world landmark). 반환: (HandView 목록, 이벤트, 커서).
+
+        이벤트는 입력한 키 또는 "BACK"(지움). 커서는 (x, y, 오므린 정도, 꼬집기 비율) 또는 None.
+        """
+        keyboard, selector = assign_roles(detections, self.keyboard_label)
         events, views = [], []
 
-        # 선택 손: 커서와 오므린 정도
+        # 선택 손: 커서와 꼬집기 비율
         cursor = selector_points = None
         ratio = None
         if selector is not None:
-            selector_points = [(p.x * width, p.y * height) for p in selector[1]]
+            selector_points = to_pixels(selector[1], width, height)
             cursor = pinch_cursor(selector_points)
             ratio = pinch_ratio(selector[2])
 
@@ -103,7 +170,7 @@ class PinchKeyboard:
         keyboard_pose = None
         if keyboard is not None:
             points, targets = key_targets(keyboard[1], width, height)
-            keyboard_pose = classify_hand_pose(keyboard[1], width, height)
+            keyboard_pose = pose_from_image(keyboard[1], width, height)
             overlapped = (selector_points is not None and targets
                           and self.cache is not None and self.inside(selector_points, self.cache.points))
             if targets and not overlapped and keyboard_pose != "fist":
@@ -130,6 +197,7 @@ class PinchKeyboard:
                     events.append(pressed)
                     self.last_press = (pressed, now)
 
+        # 화면: 강조 정도를 80ms 보간하고, 자판 손과 선택 손 HandView를 만든다.
         blend = 1.0 if self.last_time is None else 1 - math.exp(-max(0, now - self.last_time) / 0.08)
         self.last_time = now
         if self.cache is not None:
@@ -141,7 +209,7 @@ class PinchKeyboard:
                                   thumb=False))
         if selector is not None:
             views.append(HandView("Right" if self.keyboard_label == "Left" else "Left", selector_points, [], None,
-                                  classify_hand_pose(selector[1], width, height), True, thumb=False))
+                                  pose_from_image(selector[1], width, height), True, thumb=False))
         return views, events, (None if cursor is None else (*cursor, self.pinch.progress, ratio))
 
     @staticmethod
@@ -151,43 +219,40 @@ class PinchKeyboard:
         ys = [p[1] for p in keyboard_points[:21]]
         pad_x, pad_y = (max(xs) - min(xs)) * 0.1, (max(ys) - min(ys)) * 0.1
         return any(min(xs) - pad_x <= x <= max(xs) + pad_x and min(ys) - pad_y <= y <= max(ys) + pad_y
-                   for x, y in (selector_points[4], selector_points[8]))
+                   for x, y in (selector_points[THUMB_TIP], selector_points[INDEX_TIP]))
 
+
+# ---------------------------------------------------------------------------
+# 실행
 
 def run(args):
     import cv2
-    import mediapipe as mp
-    from PIL import ImageFont
 
-    font_path = find_font(args.font)
-    fonts = tuple(ImageFont.truetype(str(font_path), size) for size in (16, 21, 29))
+    fonts = load_fonts(args.font)
     ime = CheonjiinIME(args.cycle)
     keyboard = PinchKeyboard(args.keyboard.capitalize(), args.pinch_enter, args.pinch_exit, args.fist_hold)
     gap = args.pinch_exit - args.pinch_enter
     paused = show_help = False
     notice_since, status = None, ""
-    timestamp, previous, fps = -1, time.monotonic(), 0.0
+    clock, meter = VideoClock(), FpsMeter()
     capture, exit_reason = None, None
     selector_name = "오른손" if args.keyboard == "left" else "왼손"
     keyboard_name = "왼손" if args.keyboard == "left" else "오른손"
     try:
         with create_detector(args.model) as detector:
-            capture = open_capture(cv2, args)
-            cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(WINDOW, 960, 720)
+            capture = open_capture(args.camera, args.pipeline)
+            window = Window(WINDOW, (960, 720))
             while True:
-                frame, lost = read_frame(cv2, capture)
+                frame, lost = read_frame(capture)
                 if lost:
                     keyboard.reset()
                 now = time.monotonic()
-                fps = 0.9 * fps + 0.1 / max(now - previous, 1e-6)
-                previous = now
+                fps = meter.tick(now)
                 if not args.no_mirror:
                     frame = cv2.flip(frame, 1)
                 h, w = frame.shape[:2]
-                timestamp = max(timestamp + 1, int(now * 1000))
                 detections = [(label, landmarks, world) for label, landmarks, world, _ in
-                              detect_hands(cv2, mp, detector, frame, timestamp, not args.no_mirror)]
+                              detect_hands(detector, frame, clock.ms(now), not args.no_mirror)]
                 hands, events, cursor = keyboard.update(detections, w, h, now, enabled=not paused and not show_help)
                 for key in events:
                     glyph = ime.preview_label(key, now)
@@ -208,15 +273,15 @@ def run(args):
                     "[ ] 꼬집기 판정 비율    P 일시정지    S 저장    Q 종료",
                     f"꼬집기 {keyboard.pinch.enter:.2f} / 떼기 {keyboard.pinch.exit:.2f} · {fps:.0f} FPS",
                 )
-                view = draw_ui(frame, ime, hands, status, fonts, fps, paused, show_help=show_help,
+                view = draw_ui(frame, ime, hands, status, fonts, paused, show_help=show_help,
                                notice_since=notice_since, hint="키 위에서 꼬집어 입력 · 자판 손 주먹은 지움",
                                help_lines=help_lines, cursors=cursors)
-                cv2.imshow(WINDOW, view)
-                key_code = cv2.waitKey(1) & 0xFF
+                window.show(view)
+                key_code = window.read_key()
                 if key_code in (27, ord("q"), ord("Q")):
                     exit_reason = "Q/ESC 키"
                     break
-                if is_window_closed(cv2, WINDOW):
+                if window.closed():
                     exit_reason = "영상 창 닫힘"
                     break
                 char = chr(key_code)
@@ -254,10 +319,7 @@ def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--camera", type=int, default=0, help="카메라 번호 (macOS: iPhone 연결 시 0)")
-    parser.add_argument("--pipeline", help="GStreamer 문자열. 'usb'는 practice의 /dev/video0 설정")
-    parser.add_argument("--model", type=Path, default=ROOT / "src/models/MediaPipe/hand_landmarker.task")
-    parser.add_argument("--font", help="한글 폰트 ttf/ttc/otf 경로")
+    add_camera_arguments(parser, "카메라 번호 (macOS: iPhone 연결 시 0)")
     parser.add_argument("--keyboard", choices=("left", "right"), default="left", help="자판으로 쓸 손 (기본 왼손)")
     parser.add_argument("--no-mirror", action="store_true", help="좌우 반전 끄기")
     parser.add_argument("--pinch-enter", type=positive_float, default=PINCH_ENTER,
@@ -270,8 +332,7 @@ def main():
     args = parser.parse_args()
     if args.pinch_exit <= args.pinch_enter:
         parser.error("--pinch-exit는 --pinch-enter보다 커야 합니다.")
-    if args.pipeline == "usb":
-        args.pipeline = GSTREAMER
+    resolve_pipeline(args)
     try:
         run(args)
     except (RuntimeError, OSError, ValueError) as exc:

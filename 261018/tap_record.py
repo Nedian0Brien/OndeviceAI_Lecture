@@ -1,4 +1,7 @@
-"""엄지 누르기 검출기 평가용 데이터를 안내에 따라 기록한다.
+"""엄지 누르기 검출기 평가용 데이터를 안내에 따라 기록한다(엄지 마디 누르기 방식의 판정 비교 도구).
+
+카메라를 고정한 상태에서 기록해야 한다. 프레임별 landmark·world landmark·좌우 라벨을 frames.npz에,
+시행 구간과 정답을 trials.json에 남긴다. 평가는 tap_eval.py로 한다.
 
 예: python 261018/tap_record.py --hand right --placement front
 화면 안내(준비 → 수행)에 맞춰 강조된 마디를 한 번 누르거나, 가까이 갔다가 닿지 않고 돌아오거나,
@@ -17,9 +20,11 @@ import time
 
 import numpy as np
 
-from project01 import (GSTREAMER, ROOT, HAND_CONNECTIONS, create_detector, detect_hands, find_font, open_capture,
-                       read_frame)
-from tap_detect import SEGMENT_NAMES, SEGMENTS
+from common.camera import VideoClock, Window, open_capture, read_frame
+from common.cli import add_camera_arguments, resolve_pipeline
+from common.hands import create_detector, detect_hands, session_hand
+from common.hud import find_font
+from common.landmarks import HAND_CONNECTIONS, SEGMENT_NAMES, SEGMENTS
 
 
 PREPARE = 0.9
@@ -84,20 +89,9 @@ class Recorder:
                             scores=np.array(self.scores).reshape(-1, 2))
 
 
-def own_slot(labels, hand):
-    """화면에 손이 하나면 좌우 라벨과 상관없이 그 손을 쓴다 (--hand로 이미 지정했다).
-
-    비스듬한 카메라에서는 MediaPipe 좌우 라벨이 뒤집힐 수 있다. 손이 둘이면 라벨이 맞는 하나만 쓴다.
-    """
-    present = [slot for slot, label in enumerate(labels) if label]
-    if len(present) == 1:
-        return present[0]
-    matching = [slot for slot in present if labels[slot] == hand]
-    return matching[0] if len(matching) == 1 else None
-
-
 def present_ratio(recorder, hand, start, end):
-    inside = [own_slot(labels, hand) is not None
+    """start~end 구간에서 지정한 손이 보인 프레임 비율."""
+    inside = [session_hand(labels, hand) is not None
               for t, labels in zip(recorder.times, recorder.labels) if start <= t <= end]
     return sum(inside) / max(1, len(inside))
 
@@ -147,7 +141,6 @@ class interruptible:
 
 def run(args):
     import cv2
-    import mediapipe as mp
     from PIL import ImageFont
 
     font = ImageFont.truetype(str(find_font(args.font)), 18)
@@ -159,16 +152,15 @@ def run(args):
     session.mkdir(parents=True)
     recorder, trials = Recorder(), []
     writer = capture = None
-    timestamp, t0 = -1, None
+    clock, t0 = VideoClock(), None
     phase, phase_start, current = "prepare", None, (queue.pop(0) if queue else None)
     exit_reason = "완료"
     try:
         with create_detector(args.model) as detector, interruptible() as stop:
-            capture = open_capture(cv2, args)
-            cv2.namedWindow("Tap Recorder", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("Tap Recorder", 960, 720)
+            capture = open_capture(args.camera, args.pipeline)
+            window = Window("Tap Recorder", (960, 720))
             while True:
-                frame, gap = read_frame(cv2, capture)
+                frame, gap = read_frame(capture)
                 if gap and current is not None and phase == "go":
                     # 끊긴 동안의 시행은 기록하지 않고 준비부터 다시 한다.
                     phase, phase_start = "prepare", None
@@ -184,8 +176,7 @@ def run(args):
                                              (frame.shape[1], frame.shape[0]))
                     size = frame.shape[1], frame.shape[0]
                 writer.write(frame)
-                timestamp = max(timestamp + 1, int(now * 1000))
-                detections = detect_hands(cv2, mp, detector, frame, timestamp, not args.no_mirror)
+                detections = detect_hands(detector, frame, clock.ms(now), not args.no_mirror)
                 recorder.add(t, detections)
 
                 phase_start = t if phase_start is None else phase_start
@@ -212,12 +203,12 @@ def run(args):
                 done = sum(trial["valid"] for trial in trials)
                 header = (f"{args.hand} · {args.placement} · 유효 {done}/{total} · "
                           f"무효 {len(trials) - done} · R 다시 · Space 정지 · Q 저장")
-                slot = own_slot([label for label, _, _, _ in detections], hand)
+                slot = session_hand([label for label, _, _, _ in detections], hand)
                 points = None if slot is None else [(p.x, p.y, p.z) for p in detections[slot][1]]
                 view = draw(frame.copy(), points, current, phase if current else "done",
                             None if remaining is None else max(0.0, remaining), header, font)
-                cv2.imshow("Tap Recorder", view)
-                key_code = cv2.waitKey(1) & 0xFF
+                window.show(view)
+                key_code = window.read_key()
                 if stop.requested:
                     exit_reason = "Ctrl+C"
                     break
@@ -285,10 +276,7 @@ def main():
     parser.add_argument("--hand", choices=("left", "right"), required=True)
     parser.add_argument("--placement", choices=("front", "oblique"), required=True,
                         help="front: 손바닥 정면, oblique: 엄지 쪽에서 약 45° 돌린 위치(거리는 front와 같게)")
-    parser.add_argument("--camera", type=int, default=0)
-    parser.add_argument("--pipeline", help="GStreamer 문자열. 'usb'는 practice의 /dev/video0 설정")
-    parser.add_argument("--model", type=Path, default=ROOT / "src/models/MediaPipe/hand_landmarker.task")
-    parser.add_argument("--font", help="한글 폰트 ttf/ttc/otf 경로")
+    add_camera_arguments(parser)
     parser.add_argument("--no-mirror", action="store_true")
     parser.add_argument("--flip-vertical", action="store_true")
     parser.add_argument("--reps", type=int, default=5, help="마디마다 누르기 횟수")
@@ -299,8 +287,7 @@ def main():
     parser.add_argument("--seed", type=int, help="시행 순서 난수 시드 (기본: 현재 시각)")
     parser.add_argument("--out-dir", type=Path, default=Path(__file__).resolve().with_name("data") / "tap")
     args = parser.parse_args()
-    if args.pipeline == "usb":
-        args.pipeline = GSTREAMER
+    resolve_pipeline(args)
     try:
         run(args)
     except (RuntimeError, OSError, ValueError) as exc:

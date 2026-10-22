@@ -7,105 +7,61 @@
 시연:  python 261018/pinch_cheonjiin.py --demo
 """
 
+# 한 프레임의 처리 흐름 (run)
+#   카메라 프레임 → (--mirror면 좌우 반전) → 손 검출(가로 640 이하로 줄인 영상) → 왼손·오른손 배정
+#   → 손마다 HandSignal(꼬집기 비율·굽음·자세·손바닥 방향) → PinchTyper.update → 입력·마우스 이벤트
+#   → HUD 그리기 → 창 표시 → 키 입력 처리 · 진단 스크린샷
+# 판정 규칙은 모두 pinch_typer.py에 있고, 이 파일은 카메라·화면·키보드 단축키만 다룬다.
+
 import argparse
 import json
 import math
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 import time
 
-from cheonjiin import CONSONANTS
-from pinch_typer import (DISTAL, LEFT_KEYS, PINCH_ENTER, PINCH_EXIT, RIGHT_KEYS, RIGHT_SHIFT_KEYS, TIPS,
-                         VOWEL_LABELS, PinchTyper, group_of, hand_signal, key_label, replay)
+from korean_ime import CONSONANTS
+from common.camera import FpsMeter, VideoClock, Window, capture_size, open_capture, parse_resolution, read_frame
+from common.cli import add_camera_arguments, positive_float, resolve_pipeline
+from common.hands import assign_hands, create_detector, detect_hands, detection_frame
+from common.hud import MUTED, WHITE, HudCanvas, ellipsize_left, hud_font, hud_text_width, load_fonts, \
+    rounded_rectangle, ui_scale
+from common.landmarks import DISTAL_SEGMENTS, FINGER_TIPS, HAND_CONNECTIONS, MIDDLE_MCP, THUMB_TIP, WRIST, to_pixels
+from common.pose import pose_from_image
+from pinch_typer import (LEFT_KEYS, PINCH_ENTER, PINCH_EXIT, RIGHT_KEYS, RIGHT_SHIFT_KEYS, VOWEL_LABELS, PinchTyper,
+                         group_of, hand_signal, key_label, replay)
 
 
 WINDOW = "Pinch Cheonjiin"
-# 시연 장비(Jetson USB 카메라, GStreamer 640x480 30fps)가 기준이다. macOS에서 iPhone으로 시험할 때만 기본값을 올린다.
-AUTO_RESOLUTION = {"darwin": (1280, 720)}
-DEFAULT_RESOLUTION = (640, 480)
-
-
-def parse_resolution(value):
-    """--resolution 값: 'auto' 또는 '1280x720' 꼴."""
-    if value == "auto":
-        return value
-    try:
-        width, height = (int(part) for part in value.lower().split("x"))
-    except ValueError:
-        raise argparse.ArgumentTypeError("auto 또는 1280x720 꼴로 지정하세요.") from None
-    if width < 160 or height < 120:
-        raise argparse.ArgumentTypeError("너무 작은 해상도입니다.")
-    return width, height
-
-
-def capture_size(resolution, platform=None):
-    """카메라 번호로 열 때 요청할 해상도. auto는 macOS 1280x720, 그 밖(Jetson 등) 640x480."""
-    if resolution != "auto":
-        return resolution
-    return AUTO_RESOLUTION.get(platform or sys.platform, DEFAULT_RESOLUTION)
-
-
-def detection_frame(cv2, frame, max_width):
-    """손 검출용 영상. 가로가 max_width보다 크면 비율을 유지해 줄인다.
-
-    landmark는 0~1 비율 좌표라 원본 해상도 화면에 그대로 쓴다. 검출 입력을 640 이하로 두면 화면 해상도와
-    상관없이 검출 시간이 Jetson 640x480 시연과 같은 조건이 된다.
-    """
-    h, w = frame.shape[:2]
-    if w <= max_width:
-        return frame
-    return cv2.resize(frame, (max_width, max(1, round(h * max_width / w))), interpolation=cv2.INTER_AREA)
-
-
-def window_size(w, h, min_width=960, max_width=1440, max_height=900):
-    """처음 여는 창 크기. 640x480은 960x720으로 키우고, 큰 영상은 화면에 들어오게 줄인다."""
-    scale = min(max(min_width / w, 1.0), max_width / w, max_height / h)
-    return round(w * scale), round(h * scale)
 FIXTURES = Path(__file__).resolve().with_name("fixtures") / "pinch-typer-keys.json"
-BUTTONS = (("save", "저장"), ("pause", "일시정지"), ("help", "도움말"))
-MENU = (("copy", "복사"), ("clear", "전체 지우기"), ("close", "닫기"))
+BUTTONS = (("save", "저장"), ("pause", "일시정지"), ("help", "도움말"))  # 오른쪽 위 버튼(마우스로 누른다)
+MENU = (("copy", "복사"), ("clear", "전체 지우기"), ("close", "닫기"))  # 우클릭 메뉴
 ORIENTATION_NAMES = {"palm": "손바닥", "back": "손등", "turning": "회전 중", None: ""}
 # 키보드 시험용: 1~4 = 왼손 검지~소지, 7 8 9 0 = 오른손 검지~소지, Space = 왼손 주먹, Backspace = 오른손 주먹
 TEST_KEYS = {ord("1"): ("Left", 0), ord("2"): ("Left", 1), ord("3"): ("Left", 2), ord("4"): ("Left", 3),
              ord("7"): ("Right", 0), ord("8"): ("Right", 1), ord("9"): ("Right", 2), ord("0"): ("Right", 3)}
 
-WHITE = (250, 250, 252, 255)
-MUTED = (230, 231, 236, 215)
 DIM = (200, 202, 210, 150)
 SHIFT_BLUE = (132, 186, 255, 255)
 MOUSE_GREEN = (126, 224, 176, 255)
 DELETE_RED = (255, 128, 116, 255)
+OUTLINE = (28, 29, 34, 170)  # 밝은 영상 위 글자 외곽선
 
 
 # ---------------------------------------------------------------------------
 # 검출 결과 → 손 신호
 
-def assign_hands(detections):
-    """{"Left"|"Right": (landmarks, world, MediaPipe 라벨)}.
-
-    좌우는 MediaPipe 라벨(손바닥 주름·손톱 같은 겉모습으로 판단)을 따른다. 카메라가 손 맞은편에 있거나
-    영상이 돌아가 있으면 화면 위치로 정한 좌우는 뒤바뀌기 때문이다. 두 손에 같은 라벨이 붙었을 때만
-    화면 위치로 나눈다(왼쪽 = 왼손).
-    세 번째 값(MediaPipe 라벨)은 손바닥/손등 계산에 쓴다. 손 방향은 그 손을 MediaPipe가 어느 손으로
-    봤는지와 landmark 배치를 함께 봐야 정해지므로, 위치로 바꾼 라벨이 아니라 원래 라벨을 써야 한다.
-    """
-    if len(detections) >= 2:
-        first, second = detections[:2]
-        if first[0] != second[0]:
-            return {label: (landmarks, world, label) for label, landmarks, world, _ in (first, second)}
-        first, second = sorted((first, second), key=lambda d: sum(p.x for p in d[1]) / len(d[1]))
-        return {"Left": (first[1], first[2], first[0]), "Right": (second[1], second[2], second[0])}
-    return {label: (landmarks, world, label) for label, landmarks, world, _ in detections[:1]}
-
-
 def build_signals(hands, width, height, mirrored):
-    from project01 import classify_hand_pose
+    """{"Left"|"Right": Detection} → {"Left"|"Right": HandSignal}.
 
-    return {label: hand_signal(seen_as, landmarks, world, mirrored, width, height,
-                               classify_hand_pose(landmarks, width, height))
-            for label, (landmarks, world, seen_as) in hands.items()}
+    손바닥 방향은 검출의 label(MediaPipe가 본 손)로 계산한다. 같은 라벨 두 손을 화면 위치로 나눈 경우에도
+    landmark 배치와 짝이 맞는 것은 원래 label이기 때문이다(common.hands.assign_hands 설명).
+    자세는 이미지 좌표 방식(pose_from_image)을 쓴다.
+    """
+    return {role: hand_signal(hand.label, hand.landmarks, hand.world, mirrored, width, height,
+                              pose_from_image(hand.landmarks, width, height))
+            for role, hand in hands.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -126,13 +82,10 @@ def tip_text(typer, hand, finger):
 
 
 # ---------------------------------------------------------------------------
-# HUD 배치 (그리기와 클릭 판정이 같은 좌표를 쓴다)
-
-def ui_scale(w, h):
-    return min(w / 640, h / 480)
-
+# HUD 배치 (그리기와 마우스 클릭 판정이 같은 좌표를 쓴다)
 
 def button_rects(w, h):
+    """오른쪽 위 버튼들의 (키, 이름, 사각형)."""
     s = ui_scale(w, h)
     bw, bh, margin = 70 * s, 26 * s, 16 * s
     return [(key, label, (w - margin - bw, margin + i * (bh + 6 * s), w - margin, margin + i * (bh + 6 * s) + bh))
@@ -140,6 +93,7 @@ def button_rects(w, h):
 
 
 def menu_rects(position, w, h):
+    """우클릭한 위치에 여는 메뉴 항목들의 (키, 이름, 사각형). 화면 밖으로 나가지 않게 민다."""
     s = ui_scale(w, h)
     mw, mh = 104 * s, 26 * s
     x = min(max(position[0], 4), w - mw - 4)
@@ -149,6 +103,7 @@ def menu_rects(position, w, h):
 
 
 def hit(rects, point):
+    """point가 들어 있는 사각형의 키. 없으면 None."""
     for key, _, (x1, y1, x2, y2) in rects:
         if x1 <= point[0] <= x2 and y1 <= point[1] <= y2:
             return key
@@ -159,47 +114,21 @@ def hit(rects, point):
 # HUD
 
 def draw_hud(frame, typer, hands, ui, fonts, fps):
-    """hands: {"Left"|"Right": 픽셀 좌표 21개}. ui: 화면 상태(dict)."""
-    import cv2
-    import numpy as np
-    from PIL import Image, ImageDraw
-    from project01 import HAND_CONNECTIONS, blur_under, hud_font, hud_text_sprite, hud_text_width, rounded_rectangle
-
-    h, w = frame.shape[:2]
-    s = ui_scale(w, h)
-    small, normal, large = (hud_font(font, max(8, round(size * s))) for font, size in zip(fonts, (11, 14, 21)))
-    picture = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
-    overlay = Image.new("RGBA", picture.size)
-    draw = ImageDraw.Draw(overlay)
-    material = Image.new("L", picture.size)
-    material_draw = ImageDraw.Draw(material)
+    """hands: {"Left"|"Right": 픽셀 좌표 21개}. ui: 화면 상태(dict, run 참고)."""
+    canvas = HudCanvas(frame, fonts)
+    w, h, s, stroke = canvas.w, canvas.h, canvas.scale, canvas.stroke
+    small, normal, large = canvas.small, canvas.normal, canvas.large
+    draw, glass = canvas.draw, canvas.glass
     now = time.monotonic()
-    margin, stroke = 16 * s, max(1, round(s))
+    margin = 16 * s
     pinch_enter, pinch_exit = typer.hands["Left"].pinch.enter, typer.hands["Left"].pinch.exit
     mouse = typer.mode == "mouse"
     cursor = (typer.cursor[0] * w, typer.cursor[1] * h)
 
     def write(position, text, font, fill, anchor="la", outline=False):
-        sprite, left, top = hud_text_sprite(text, font, fill, anchor, stroke if outline else 0,
-                                            (28, 29, 34, 170) if outline else None)
-        overlay.alpha_composite(sprite, (round(position[0] + left), round(position[1] + top)))
+        canvas.write(position, text, font, fill, anchor, stroke if outline else 0, OUTLINE if outline else None)
 
-    def glass(bounds, circle=False, hover=False, pressed=False, tint=None):
-        x1, y1, x2, y2 = bounds
-        radius = (y2 - y1) / 2
-        fill = (245, 246, 250, 215) if pressed else ((85, 92, 104, 200) if hover else (31, 33, 40, 140))
-        if tint and not pressed:
-            fill = tint[:3] + (70 if not hover else 120,)
-        edge = (255, 255, 255, 185 if hover or pressed else 65)
-        if circle:
-            material_draw.ellipse(bounds, fill=205)
-            draw.ellipse(bounds, fill=fill, outline=edge, width=stroke)
-        else:
-            rounded_rectangle(draw, (x1, y1 + 2 * s, x2, y2 + 2 * s), radius, fill=(0, 0, 0, 25))
-            rounded_rectangle(material_draw, bounds, radius, fill=205)
-            rounded_rectangle(draw, bounds, radius, fill=fill, outline=edge, width=stroke)
-
-    # 손: 얇은 mesh, 손별 방향, 가장 가까운 손끝의 꼬집기 진행, 주먹 진행
+    # 손: 얇은 골격선, 손 이름과 방향, 손끝 라벨, 꼬집기 진행, 주먹 진행
     for label, points in hands.items():
         state = typer.hands[label]
         for a, b in HAND_CONNECTIONS:
@@ -209,18 +138,19 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
             caption += " · " + ORIENTATION_NAMES[state.orientation.state]
         if not state.pinch.armed:
             caption += " · 손을 펴세요"
-        x, y = points[0]
+        x, y = points[WRIST]
         write((min(max(x, 40 * s), w - 40 * s), min(y + 12 * s, h - 20 * s)), caption, small, MUTED, "ma", True)
-        # 손끝 라벨: 손가락 끝마디 방향으로 손끝 바로 바깥에 둔다(닿는 면을 가리지 않게).
-        tips = [points[tip] for tip in TIPS]
+        # 손끝 라벨: 손가락 끝마디 방향으로 손끝 바로 바깥에 둔다(엄지가 닿는 면을 가리지 않게).
+        tips = [points[tip] for tip in FINGER_TIPS]
         spacing = min(math.dist(a, b) for a, b in zip(tips, tips[1:]))
         diameter = min(26 * s, max(15 * s, spacing * 0.9))
         values = None if state.signal is None else state.signal.ratios
         for finger in range(4):
             tx, ty = tips[finger]
-            dx, dy = tx - points[DISTAL[finger][0]][0], ty - points[DISTAL[finger][0]][1]
+            dx, dy = tx - points[DISTAL_SEGMENTS[finger][0]][0], ty - points[DISTAL_SEGMENTS[finger][0]][1]
             norm = math.hypot(dx, dy) or 1.0
             cx, cy = tx + dx / norm * diameter * 0.85, ty + dy / norm * diameter * 0.85
+            # 꼬집기 진행: 떼기 기준(exit)에서 0, 접촉 기준(enter)에서 1
             progress = 0.0 if values is None else min(1.0, max(0.0, (pinch_exit - values[finger])
                                                                 / (pinch_exit - pinch_enter)))
             active = state.pinch.active == finger
@@ -236,22 +166,19 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
                 write((cx, cy), text, hud_font(fonts[1], max(8, round(diameter * 0.55))) if len(text) == 1 else small,
                       ink, "mm")
             if progress > 0 and not active:
-                r = 6 * s
-                draw.arc((tx - r, ty - r, tx + r, ty + r), -90, -90 + 360 * progress, fill=color,
-                         width=max(2, round(2 * s)))
+                canvas.progress_arc((tx, ty), 6 * s, progress, color, max(2, round(2 * s)))
             if ui["debug"] and values is not None:
                 write((tx - dx / norm * 12 * s, ty - dy / norm * 12 * s),
                       f"{values[finger]:.2f}", small, WHITE if values[finger] < pinch_enter else DIM, "mm", True)
-        thumb = points[4]
+        thumb = points[THUMB_TIP]
         r = 3 * s
         draw.ellipse((thumb[0] - r, thumb[1] - r, thumb[0] + r, thumb[1] + r), fill=(245, 248, 252, 200))
         if state.fist.progress > 0 and not mouse:
-            cx = (points[0][0] + points[9][0]) / 2
-            cy = (points[0][1] + points[9][1]) / 2
-            r = 22 * s
+            # 주먹 진행: 손목~중지 뿌리 가운데에 호. 오른손은 지움(빨강), 왼손은 확정/공백.
+            cx = (points[WRIST][0] + points[MIDDLE_MCP][0]) / 2
+            cy = (points[WRIST][1] + points[MIDDLE_MCP][1]) / 2
             color = DELETE_RED if label == "Right" else WHITE
-            draw.arc((cx - r, cy - r, cx + r, cy + r), -90, -90 + 360 * state.fist.progress, fill=color,
-                     width=max(2, round(3 * s)))
+            canvas.progress_arc((cx, cy), 22 * s, state.fist.progress, color, max(2, round(3 * s)))
             if label == "Right":
                 text = "지움"
             else:
@@ -260,14 +187,8 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
 
     # 위: 입력 한 줄 캡슐. 확정 전 후보 글자 아래에 밑줄.
     text = typer.ime.text.split("\n")[-1]
-    shown = text or "손끝을 꼬집어 입력"
     font = large if text else normal
-    available = min(w - 2 * margin, 420 * s) - 36 * s
-    if hud_text_width(shown, font) > available:
-        keep = len(shown)
-        while keep > 0 and hud_text_width("…" + shown[-keep:], font) > available:
-            keep -= 1
-        shown = "…" + shown[-keep:] if keep else "…"
+    shown = ellipsize_left(text or "손끝을 꼬집어 입력", font, min(w - 2 * margin, 420 * s) - 36 * s)
     width = min(w - 2 * margin, max(140 * s, hud_text_width(shown, font) + 40 * s))
     height = (40 if text else 34) * s
     x1 = (w - width) / 2
@@ -278,7 +199,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         last = hud_text_width(shown[-1:], font)
         draw.line((text_right - last, margin + height - 9 * s, text_right, margin + height - 9 * s),
                   fill=SHIFT_BLUE if typer.pending.key in RIGHT_SHIFT_KEYS else WHITE, width=max(2, round(2 * s)))
-    elif text and int(now * 2) % 2 == 0 and not ui["paused"]:
+    elif text and int(now * 2) % 2 == 0 and not ui["paused"]:  # 0.5초 간격 깜빡이는 커서
         draw.line((text_right + 4 * s, margin + 12 * s, text_right + 4 * s, margin + height - 12 * s),
                   fill=MUTED, width=stroke)
 
@@ -312,7 +233,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         glass(bounds, hover=hover, pressed=hover and typer.button_down)
         write(((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2), title, small, WHITE, "mm")
 
-    # 아래: 자판 지도. 손에 라벨을 붙이지 않고 패널로 보여준다(visionOS에서도 같은 원칙).
+    # 아래: 자판 지도(K). 손에 라벨을 붙이지 않고 패널로 보여준다(visionOS에서도 같은 원칙).
     if ui["show_map"] and not mouse:
         cell_w, cell_h, gap = 50 * s, 28 * s, 5 * s
         top = h - margin - cell_h
@@ -339,7 +260,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         message = ui["status"]
     if message and not ui["show_help"]:
         mw = min(w - 2 * margin, hud_text_width(message, small) + 28 * s)
-        top = h - (ui["show_map"] and not mouse and 92 or 58) * s
+        top = h - (ui["show_map"] and not mouse and 92 or 58) * s  # 자판 지도가 있으면 그 위에
         glass(((w - mw) / 2, top, (w + mw) / 2, top + 26 * s))
         write((w / 2, top + 13 * s), message, small, MUTED, "mm")
 
@@ -350,11 +271,8 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
             glass(bounds, hover=hover)
             write((bounds[0] + 12 * s, (bounds[1] + bounds[3]) / 2), label, small, WHITE, "lm")
     if mouse and not ui["os_mouse"]:
-        x, y = cursor
-        r = 8 * s
-        draw.ellipse((x - r - s, y - r - s, x + r + s, y + r + s), outline=(20, 23, 29, 190), width=max(2, round(3 * s)))
-        draw.ellipse((x - r, y - r, x + r, y + r), outline=MOUSE_GREEN, width=max(2, round(2 * s)),
-                     fill=MOUSE_GREEN[:3] + (150,) if typer.button_down else None)
+        canvas.ring(cursor, 8 * s, MOUSE_GREEN, fill=MOUSE_GREEN[:3] + (150,) if typer.button_down else None,
+                    min_width=2)
 
     if ui["show_help"]:
         draw.rectangle((0, 0, w, h), fill=(16, 17, 21, 165))
@@ -365,9 +283,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
             write((box[0] + 20 * s, box[1] + (20 + i * 27) * s), line, normal if i == 0 else small,
                   WHITE if i == 0 else MUTED)
 
-    picture = blur_under(picture, material)
-    picture = Image.alpha_composite(picture, overlay).convert("RGB")
-    return cv2.cvtColor(np.asarray(picture), cv2.COLOR_RGB2BGR)
+    return canvas.finish()
 
 
 HELP_LINES = [
@@ -416,11 +332,11 @@ class OsMouse:
 def annotate_snapshot(cv2, image, hands, signals, typer, w, h):
     """진단용 스크린샷에 손별 판정값을 ASCII로 덧붙인다: 역할(MediaPipe 라벨) / facing / 방향 / 모드."""
     out = image.copy()
-    for role, (landmarks, _, seen_as) in hands.items():
+    for role, hand in hands.items():
         signal = signals.get(role)
-        x, y = int(landmarks[0].x * w), int(landmarks[0].y * h)
+        x, y = int(hand.landmarks[WRIST].x * w), int(hand.landmarks[WRIST].y * h)
         state = typer.hands[role].orientation.state or "-"
-        text = f"{role}(mp:{seen_as}) f{signal.facing:+.2f} {state} min{min(signal.ratios):.2f}"
+        text = f"{role}(mp:{hand.label}) f{signal.facing:+.2f} {state} min{min(signal.ratios):.2f}"
         for color, width in (((0, 0, 0), 3), ((0, 255, 255), 1)):
             cv2.putText(out, text, (max(4, x - 120), min(h - 8, y + 34)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, width)
     cv2.putText(out, f"mode={typer.mode} t={time.strftime('%H:%M:%S')}", (8, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
@@ -429,6 +345,7 @@ def annotate_snapshot(cv2, image, hands, signals, typer, w, h):
 
 
 def copy_text(text):
+    """시스템 클립보드에 복사한다(macOS pbcopy, Linux wl-copy / xclip). 도구가 없으면 False."""
     for command in (["pbcopy"], ["wl-copy"], ["xclip", "-selection", "clipboard"]):
         if shutil.which(command[0]):
             subprocess.run(command, input=text.encode("utf-8"), check=False)
@@ -440,23 +357,27 @@ def copy_text(text):
 # 실행
 
 def demo():
+    """카메라 없이 고정 데이터(fixtures/pinch-typer-keys.json)의 첫 시퀀스를 재생한다."""
     data = json.loads(FIXTURES.read_text(encoding="utf-8"))
     case = data["cases"][0]
     print(case["name"])
     print(replay(case["steps"]).ime.text)
 
 
+def is_dark(frame):
+    """영상이 거의 검은지(16픽셀 간격 표본의 최댓값 < 8). Continuity Camera가 멈추면 검은 프레임이 들어온다."""
+    return frame[::16, ::16].max() < 8
+
+
 def run(args):
     import cv2
-    import mediapipe as mp
-    from PIL import ImageFont
-    from project01 import create_detector, detect_hands, find_font, is_window_closed, open_capture, read_frame
 
-    fonts = tuple(ImageFont.truetype(str(find_font(args.font)), size) for size in (16, 21, 29))
+    fonts = load_fonts(args.font)
     typer = PinchTyper(enter=args.pinch_enter, exit=args.pinch_exit, fist_hold=args.fist_hold, gain=args.gain)
     os_mouse = OsMouse(args.os_scale) if args.os_mouse else None
     if os_mouse:
         print("OS 마우스 모드: macOS에서는 시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용에서 터미널을 허용하세요.")
+    # 화면 상태. draw_hud가 읽고, 단축키·마우스 버튼이 바꾼다.
     ui = {"paused": False, "show_help": False, "show_map": False, "tip_labels": True, "debug": False, "menu": None,
           "os_mouse": bool(os_mouse), "status": "", "notice_since": None, "help_lines": HELP_LINES}
     log = open(args.log, "a", encoding="utf-8") if args.log else None
@@ -466,12 +387,13 @@ def run(args):
     snapshot_count, last_snapshot = 0, 0.0
     dark_since, dark_warned = None, False  # 카메라가 열렸지만 검은 프레임만 들어오는 경우(Continuity Camera 멈춤 등)
     capture, exit_reason = None, None
-    timestamp, previous, fps = -1, time.monotonic(), 0.0
+    clock, meter = VideoClock(), FpsMeter()
 
     def notice(message):
         ui["status"], ui["notice_since"] = message, time.monotonic()
 
     def action(key):
+        """버튼·메뉴·단축키가 공통으로 부르는 동작."""
         if key == "save":
             try:
                 args.output.write_text(typer.ime.text, encoding="utf-8")
@@ -495,24 +417,22 @@ def run(args):
     try:
         with create_detector(args.model) as detector:
             size = capture_size(args.resolution)
-            capture = open_capture(cv2, args, size)
-            cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-            window_ready, fullscreen = False, False
+            capture = open_capture(args.camera, args.pipeline, size)
+            window = Window(WINDOW)  # 첫 화면 크기에 맞춰 연다
+            first_frame = True
             while True:
-                frame, gap = read_frame(cv2, capture)
-                if not window_ready:
+                frame, gap = read_frame(capture)
+                if first_frame:
                     fh, fw = frame.shape[:2]
-                    small = detection_frame(cv2, frame, args.detect_width).shape
+                    small = detection_frame(frame, args.detect_width).shape
                     requested = "GStreamer 파이프라인" if args.pipeline else f"요청 {size[0]}x{size[1]}"
                     print(f"카메라 해상도 {fw}x{fh} ({requested}), 손 검출 입력 {small[1]}x{small[0]}", flush=True)
-                    cv2.resizeWindow(WINDOW, *window_size(fw, fh))
-                    window_ready = True
+                    first_frame = False
                 if gap:
-                    typer.reset()
+                    typer.reset()  # 끊긴 동안의 손 상태로 입력하지 않는다.
                 now = time.monotonic()
-                fps = 0.9 * fps + 0.1 / max(now - previous, 1e-6)
-                previous = now
-                if frame[::16, ::16].max() < 8:
+                fps = meter.tick(now)
+                if is_dark(frame):
                     dark_since = dark_since or now
                     if now - dark_since > 2.0 and not dark_warned:
                         dark_warned = True
@@ -524,9 +444,11 @@ def run(args):
                 if args.mirror:
                     frame = cv2.flip(frame, 1)
                 h, w = frame.shape[:2]
-                timestamp = max(timestamp + 1, int(now * 1000))
-                hands = assign_hands(detect_hands(cv2, mp, detector, detection_frame(cv2, frame, args.detect_width),
-                                                  timestamp, args.mirror))
+
+                # 검출 → 신호 → 상태 머신
+                detections = detect_hands(detector, detection_frame(frame, args.detect_width), clock.ms(now),
+                                          args.mirror)
+                hands = assign_hands(detections)
                 signals = build_signals(hands, w, h, args.mirror)
                 enabled = not ui["paused"] and not ui["show_help"]
                 events = typer.update(signals, now) if enabled else []
@@ -534,7 +456,7 @@ def run(args):
                     kind = event[0]
                     if os_mouse and kind in ("move", "click", "down", "up"):
                         os_mouse.handle(event)
-                    elif kind == "click":
+                    elif kind == "click":  # 가상 커서 클릭: 메뉴 → 버튼 순서로 맞는 것을 찾는다.
                         point = (typer.cursor[0] * w, typer.cursor[1] * h)
                         if event[1] == "right":
                             ui["menu"] = point
@@ -552,15 +474,17 @@ def run(args):
                 if log:
                     log.write(json.dumps({
                         "t": round(now, 4), "mode": typer.mode,
-                        "hands": {label: {"seen_as": hands[label][2],
-                                          "ratios": [round(v, 4) for v in sig.ratios], "facing": round(sig.facing, 3),
-                                          "pose": sig.pose, "curled": list(sig.curled)}
-                                  for label, sig in signals.items()},
+                        "hands": {role: {"seen_as": hands[role].label,
+                                         "ratios": [round(v, 4) for v in sig.ratios], "facing": round(sig.facing, 3),
+                                         "pose": sig.pose, "curled": list(sig.curled)}
+                                  for role, sig in signals.items()},
                         "events": [list(e) for e in events]}, ensure_ascii=False) + "\n")
-                points = {label: [(p.x * w, p.y * h) for p in landmarks] for label, (landmarks, _, _) in hands.items()}
+
+                # 화면
+                points = {role: to_pixels(hand.landmarks, w, h) for role, hand in hands.items()}
                 view = draw_hud(frame, typer, points, ui, fonts, fps)
-                cv2.imshow(WINDOW, view)
-                code = cv2.waitKey(1) & 0xFF
+                window.show(view)
+                code = window.read_key()
                 reasons = []
                 if now - last_snapshot >= 1.0:
                     reasons.append(f"auto-{snapshot_count % 40:02d}")
@@ -575,10 +499,12 @@ def run(args):
                         cv2.imwrite(str(args.snapshots / f"{reason}.jpg"), shot, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     snapshot_count += 1
                     last_snapshot = now
+
+                # 단축키
                 if code in (27, ord("q"), ord("Q")):
                     exit_reason = "Q/ESC 키"
                     break
-                if is_window_closed(cv2, WINDOW):
+                if window.closed():
                     exit_reason = "영상 창 닫힘"
                     break
                 if code in TEST_KEYS:
@@ -590,9 +516,7 @@ def run(args):
                 elif code in (ord("s"), ord("S")):
                     action("save")
                 elif code in (ord("f"), ord("F")):
-                    fullscreen = not fullscreen
-                    cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
-                                          cv2.WINDOW_FULLSCREEN if fullscreen else cv2.WINDOW_NORMAL)
+                    window.toggle_fullscreen()
                 elif code in (ord("p"), ord("P")):
                     action("pause")
                 elif code in (ord("h"), ord("H")):
@@ -604,6 +528,7 @@ def run(args):
                 elif code in (ord("d"), ord("D")):
                     ui["debug"] = not ui["debug"]
                 elif code in (ord("["), ord("]")):
+                    # 꼬집기 판정 비율 0.02 단위 조절. 떼기 기준과의 간격은 유지한다.
                     gap = typer.hands["Left"].pinch.exit - typer.enter
                     enter = min(0.5, max(0.1, round(typer.enter + (0.02 if code == ord("]") else -0.02), 2)))
                     typer.set_pinch(enter, round(enter + gap, 2))
@@ -621,13 +546,8 @@ def run(args):
 
 
 def main():
-    from project01 import GSTREAMER, ROOT, positive_float
-
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--camera", type=int, default=0, help="카메라 번호 (macOS: iPhone 연결 시 0)")
-    parser.add_argument("--pipeline", help="GStreamer 문자열. 'usb'는 practice의 /dev/video0 설정")
-    parser.add_argument("--model", type=Path, default=ROOT / "src/models/MediaPipe/hand_landmarker.task")
-    parser.add_argument("--font", help="한글 폰트 ttf/ttc/otf 경로")
+    add_camera_arguments(parser, "카메라 번호 (macOS: iPhone 연결 시 0)")
     parser.add_argument("--mirror", action="store_true", help="좌우 반전 (카메라가 사람을 마주 보는 셀카 배치)")
     parser.add_argument("--resolution", type=parse_resolution, default="auto",
                         help="카메라 번호로 열 때 요청할 해상도. auto: macOS 1280x720, 그 밖(Jetson) 640x480. "
@@ -654,8 +574,7 @@ def main():
         parser.error("--pinch-exit는 --pinch-enter보다 커야 합니다.")
     if args.detect_width < 160:
         parser.error("--detect-width는 160 이상으로 지정하세요.")
-    if args.pipeline == "usb":
-        args.pipeline = GSTREAMER
+    resolve_pipeline(args)
     try:
         run(args)
     except (RuntimeError, OSError, ValueError) as exc:

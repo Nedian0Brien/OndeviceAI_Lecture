@@ -1,13 +1,18 @@
-"""pinch_typer 검증. 카메라·MediaPipe 없이 표준 라이브러리만으로 실행된다."""
+"""손끝 꼬집기 입력(pinch_typer)과 앱(pinch_cheonjiin)의 카메라 없는 부분 검증.
+
+상태 머신 테스트는 표준 라이브러리만 쓴다. CameraSizeTests는 numpy·OpenCV를 쓴다(검출 영상 축소).
+실행: python -m unittest discover -s 261018 -p 'test_*.py' -v
+"""
 
 import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
-from cheonjiin import CheonjiinIME
-from pinch_typer import (FingerPinch, HandSignal, Kalman1D, Orientation, PinchTyper, hand_signal, palm_facing,
-                         pinch_ratios, replay)
+from korean_ime import CheonjiinIME
+from common.gestures import Kalman1D, Orientation
+from common.pose import palm_facing
+from pinch_typer import FingerPinch, HandSignal, PinchTyper, hand_signal, pinch_ratios, replay
 
 
 FIXTURES = Path(__file__).resolve().with_name("fixtures") / "pinch-typer-keys.json"
@@ -295,23 +300,24 @@ class AppHelpersTest(unittest.TestCase):
     """pinch_cheonjiin의 카메라 없는 부분: 손 배정, 버튼 판정, OS 마우스(B)."""
 
     def test_assign_hands_by_position(self):
-        from pinch_cheonjiin import assign_hands
+        from common.hands import assign_hands
 
         def hand(x):
             return [SimpleNamespace(x=x, y=0.5, z=0.0)] * 21
         # 라벨이 서로 다르면 화면 위치와 상관없이 라벨을 따른다(카메라가 손 맞은편에 있는 배치).
         hands = assign_hands([("Left", hand(0.8), "w-left", 0.9), ("Right", hand(0.2), "w-right", 0.9)])
-        self.assertEqual(hands["Left"][1], "w-left")
-        self.assertEqual(hands["Right"][1], "w-right")
+        self.assertEqual(hands["Left"][2], "w-left")
+        self.assertEqual(hands["Right"][2], "w-right")
         # 두 손 모두 Right로 불리면 화면 왼쪽 손을 왼손으로 정하고, 방향 계산용 원래 라벨은 남긴다.
         hands = assign_hands([("Right", hand(0.7), "w-right", 0.9), ("Right", hand(0.2), "w-left", 0.6)])
-        self.assertEqual(hands["Left"][1:], ("w-left", "Right"))
-        self.assertEqual(hands["Right"][1:], ("w-right", "Right"))
+        self.assertEqual((hands["Left"][2], hands["Left"][0]), ("w-left", "Right"))
+        self.assertEqual((hands["Right"][2], hands["Right"][0]), ("w-right", "Right"))
         self.assertEqual(list(assign_hands([("Left", hand(0.8), "w", 0.9)])), ["Left"])
 
     def test_facing_follows_mediapipe_label_not_position(self):
         """카메라가 손 맞은편에 있어 오른손이 화면 왼쪽에 보여도 손바닥이면 손바닥이다."""
-        from pinch_cheonjiin import assign_hands, build_signals
+        from common.hands import Detection, assign_hands
+        from pinch_cheonjiin import build_signals
 
         def palm_up(center, thumb_right):
             d = 1 if thumb_right else -1
@@ -325,7 +331,7 @@ class AppHelpersTest(unittest.TestCase):
         # 1인칭 기준 오른손 손바닥(엄지가 오른쪽) 모양이 화면 왼쪽에, 왼손 손바닥이 오른쪽에 있다.
         right_img, right_world = palm_up(0.3, thumb_right=True)
         left_img, left_world = palm_up(0.7, thumb_right=False)
-        hands = assign_hands([("Right", right_img, right_world, 0.9), ("Left", left_img, left_world, 0.9)])
+        hands = assign_hands([Detection("Right", right_img, right_world, 0.9), Detection("Left", left_img, left_world, 0.9)])
         signals = build_signals(hands, 640, 480, mirrored=False)
         self.assertGreater(signals["Right"].facing, 0.25)
         self.assertGreater(signals["Left"].facing, 0.25)
@@ -404,7 +410,7 @@ class AppHelpersTest(unittest.TestCase):
 class CameraSizeTests(unittest.TestCase):
     def test_resolution_argument(self):
         import argparse
-        from pinch_cheonjiin import parse_resolution
+        from common.camera import parse_resolution
 
         self.assertEqual(parse_resolution("auto"), "auto")
         self.assertEqual(parse_resolution("1280x720"), (1280, 720))
@@ -414,7 +420,7 @@ class CameraSizeTests(unittest.TestCase):
                 parse_resolution(bad)
 
     def test_auto_keeps_jetson_at_640x480(self):
-        from pinch_cheonjiin import capture_size
+        from common.camera import capture_size
 
         self.assertEqual(capture_size("auto", "linux"), (640, 480))
         self.assertEqual(capture_size("auto", "darwin"), (1280, 720))
@@ -422,16 +428,15 @@ class CameraSizeTests(unittest.TestCase):
 
     def test_detection_frame_is_capped_and_keeps_aspect(self):
         import numpy as np
-        import cv2
-        from pinch_cheonjiin import detection_frame
+        from common.hands import detection_frame
 
         small = np.zeros((480, 640, 3), np.uint8)
-        self.assertIs(detection_frame(cv2, small, 640), small)
-        self.assertEqual(detection_frame(cv2, np.zeros((720, 1280, 3), np.uint8), 640).shape, (360, 640, 3))
-        self.assertEqual(detection_frame(cv2, np.zeros((1080, 1920, 3), np.uint8), 640).shape, (360, 640, 3))
+        self.assertIs(detection_frame(small, 640), small)
+        self.assertEqual(detection_frame(np.zeros((720, 1280, 3), np.uint8), 640).shape, (360, 640, 3))
+        self.assertEqual(detection_frame(np.zeros((1080, 1920, 3), np.uint8), 640).shape, (360, 640, 3))
 
     def test_window_size(self):
-        from pinch_cheonjiin import window_size
+        from common.camera import window_size
 
         self.assertEqual(window_size(640, 480), (960, 720))
         self.assertEqual(window_size(1280, 720), (1280, 720))

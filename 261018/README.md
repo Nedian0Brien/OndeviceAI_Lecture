@@ -69,12 +69,10 @@ python 261018/pinch_cheonjiin.py --demo                     # 카메라 없이 '
   - 1920×1080: 30.0ms → 22.6ms
   - 줄어든 이유는 두 가지입니다. 유리 재질 흐림을 버튼이 있는 영역에만 적용했고, 손 검출에 넣는 영상을 줄였습니다.
 
-### 구성
-- `pinch_typer.py`: 카메라와 분리한 핵심 상태 머신(표준 라이브러리만). 손별 신호(손가락별 꼬집기 비율, 굽힘, 자세, 손 방향, 커서 기준점)를 받아 입력과 마우스 이벤트를 만듭니다. visionOS(ARKit)로 옮길 때도 이 신호만 만들면 됩니다.
-- `fixtures/pinch-typer-keys.json`: 입력 시퀀스와 기대 결과. 다른 언어로 이식할 때 같은 파일로 검증합니다.
+### 판정 방식
 - 꼬집기 거리 = 엄지 끝~손가락 끝마디 선분(DIP→TIP) world 거리 / 손목~중지 뿌리 길이. landmark가 뼈 축 위에 있어 살이 맞닿아도 0이 되지 않으므로, 손끝 점이 아니라 끝마디 선분까지 잽니다. 0.25 아래면 접촉이고, 가장 가까운 손가락이 두 번째보다 0.03 이상 가까워야 합니다(중지를 꼬집으면 약지도 함께 가까워지기 때문). 0.38 위로 벌리면 뗌입니다. 빠르게 연속으로 꼬집을 때는 0.38까지 벌리지 않으므로, 접촉 중 최저값보다 0.12 이상 올라가고 0.30을 넘어도 뗌으로 봅니다. 떼기는 2프레임 연속이어야 인정해서, landmark가 한 프레임만 튀는 것은 세지 않습니다. `D`를 누르면 손가락별 값이 보입니다.
 - 판정값은 모든 사람에게 같은 고정값이며 사용자별 보정 단계는 없습니다. 현재 값은 임시값이고 `--log` 실측으로 다시 정합니다.
-- 손 방향은 손목·검지 뿌리·소지 뿌리가 이루는 2D 외적의 부호로 정하고, 새 방향이 0.15초 이어져야 바꿉니다(한 프레임 튐 무시). 왼손·오른손은 MediaPipe 좌우 라벨을 따르고, 두 손에 같은 라벨이 붙었을 때만 화면 위치로 나눕니다(왼쪽 = 왼손). MediaPipe Tasks는 입력 영상에 보이는 실제 손을 라벨로 내므로, 영상을 좌우 반전했을 때만 라벨을 뒤집습니다(`project01.detect_hands`).
+- 손 방향은 손목·검지 뿌리·소지 뿌리가 이루는 2D 외적의 부호로 정하고, 새 방향이 0.15초 이어져야 바꿉니다(한 프레임 튐 무시). 왼손·오른손은 MediaPipe 좌우 라벨을 따르고, 두 손에 같은 라벨이 붙었을 때만 화면 위치로 나눕니다(왼쪽 = 왼손). MediaPipe Tasks는 입력 영상에 보이는 실제 손을 라벨로 내므로, 영상을 좌우 반전했을 때만 라벨을 뒤집습니다(`common/hands.py`의 `true_label`).
 
 ## 환경 준비
 
@@ -102,7 +100,7 @@ python -m pip install absl-py flatbuffers sounddevice certifi
 - 한글 폰트는 Noto CJK, 나눔고딕, 맑은 고딕, Apple SD Gothic Neo의 일반 설치 경로에서 찾습니다.
 - 없으면 `--font /경로/한글폰트.ttf`를 지정합니다. Ubuntu의 Noto CJK 패키지는 `fonts-noto-cjk`입니다.
 
-## 천지인 조합 (`cheonjiin.py`)
+## 한글 조합 (`korean_ime.py`)
 
 모든 입력기가 같은 조합기(`CheonjiinIME`)를 씁니다.
 - 지원 범위: 현대 한글 모음 21개, 자음 순환, 초성·중성·종성 조합, 겹받침, 다음 모음으로 받침 이동
@@ -138,7 +136,7 @@ MediaPipe VIDEO 모드와 `detect_for_video`는 [공식 Python 안내](https://a
 | --- | --- | --- |
 | 엄지로 고른 키를 주먹으로 확정 (Jetson 원본) | 커밋 `767a19f`의 `project01.py` | 글자마다 손을 폈다 쥐어야 해서 입력이 거의 불가능했다. |
 | 엄지로 마디를 누르면 입력, 주먹은 지움 | `project01.py`, `tap_*.py` | 단안 카메라로는 엄지가 마디에 닿았는지 판정하지 못해 iPhone 실기 시험에서 입력되지 않았다. |
-| 자판 손 버튼을 선택 손으로 꼬집기 (방식 1) | `pinch_keyboard.py`, `pinch_detect.py` | 입력은 되었지만(`ㅂㅂㅇㅈ`), 맞은편 카메라 배치에서는 사용자 시점과 화면이 달라 조작하기 어려웠다. |
+| 자판 손 버튼을 선택 손으로 꼬집기 (방식 1) | `pinch_keyboard.py` | 입력은 되었지만(`ㅂㅂㅇㅈ`), 맞은편 카메라 배치에서는 사용자 시점과 화면이 달라 조작하기 어려웠다. |
 
 **엄지 마디 누르기 (`project01.py`)**
 - 키는 검지~소지 4개 손가락 × 끝·중간·뿌리 마디 3개, 모두 12곳의 중점에 놓입니다.
@@ -153,6 +151,34 @@ MediaPipe VIDEO 모드와 `detect_for_video`는 [공식 Python 안내](https://a
 - 왼손 주먹은 지움입니다.
 - `python 261018/pinch_keyboard.py --camera 0`으로 실행합니다.
 
+## 코드 구성
+
+앱은 카메라·화면·단축키만 다루고, 판정 규칙과 공통 기능은 아래 모듈에 있습니다. 앱끼리는 서로 import하지 않습니다.
+
+| 파일 | 역할 |
+| --- | --- |
+| `pinch_cheonjiin.py` | 주 버전 앱: 손끝 꼬집기 입력기 + 손등 마우스(HUD, 실행 루프, 단축키, 진단 스크린샷) |
+| `pinch_typer.py` | 주 버전의 판정 규칙: 손 신호(`HandSignal`), 손가락별 꼬집기(`FingerPinch`), 양손 입력기(`PinchTyper`). 카메라와 무관 |
+| `korean_ime.py` | 천지인 방식 한글 조합기 |
+| `project01.py` | 이전 시도 앱: 엄지 마디 누르기 |
+| `pinch_keyboard.py` | 이전 시도 앱: 선택 손 꼬집기(방식 1) |
+| `tap_detect.py`, `tap_record.py`, `tap_eval.py` | 엄지 마디 누르기 판정을 비교하는 검출기·녹화·평가 도구 |
+| `fixtures/` | 고정 데이터: 꼬집기 입력 시퀀스(`pinch-typer-keys.json`), 실제 손 landmark(`handedness.json`) |
+
+공통 모듈(`common/`)은 다음과 같습니다. 외부 패키지(OpenCV·MediaPipe·Pillow)는 필요한 함수 안에서 불러오므로, `--demo`와 상태 머신 테스트는 그 패키지 없이도 돕니다.
+
+| 모듈 | 내용 |
+| --- | --- |
+| `common/landmarks.py` | MediaPipe 손 landmark 번호, 마디 선분(`SEGMENTS`), 좌표 변환·거리 계산. 좌표계(이미지·픽셀·world) 설명 |
+| `common/pose.py` | 편 손·접는 중·주먹 판정(이미지 방식, world 각도 방식), 손바닥/손등 방향 |
+| `common/gestures.py` | 시간에 따른 판정기: 머무름(`TouchGate`), 주먹 유지(`FistHold`), 손 방향(`Orientation`), 칼만 필터(`Kalman1D`) |
+| `common/hands.py` | MediaPipe 손 검출(`Detection`), 좌우 라벨 규칙, 왼손·오른손 배정, 검출 입력 축소 |
+| `common/camera.py` | 카메라 열기(Jetson GStreamer / 카메라 번호), 프레임 끊김 대기, 해상도, 영상 창, 시각·fps |
+| `common/hud.py` | 글꼴, 글자 캐시, 유리 버튼·흐림 처리를 묶은 `HudCanvas` |
+| `common/hand_keys.py` | 손가락 마디 12칸 자판과 그 자판을 손 위에 그리는 HUD(이전 시도 앱 두 개가 함께 씀) |
+| `common/cli.py` | 공통 실행 옵션(`--camera`, `--pipeline`, `--model`, `--font`) |
+| `common/synthetic.py` | 테스트용 합성 손 |
+
 ## 검증
 
 ```bash
@@ -166,7 +192,7 @@ python 261018/project01.py --demo
 | 테스트 | 검증 내용 |
 | --- | --- |
 | `test_pinch_typer.py` | 고정 데이터(`fixtures/pinch-typer-keys.json`) 재생, 손가락별 꼬집기·순환·쉬프트·주먹, 손 방향, 손 배정, 마우스 제스처 |
-| `test_project01.py` | 한글 조합, 12개 마디 누르기, 띄운 엄지 무시, 주먹 지움, 손 유실·양손 독립, 편 손/주먹 판정 |
+| `test_project01.py` | 한글 조합, 12개 마디 누르기, 띄운 엄지 무시, 주먹 지움, 손 유실·양손 독립, 편 손/주먹 판정, 공통 모듈(창 닫힘, 둥근 버튼, 흐림 범위, 좌우 라벨 규칙과 실제 landmark의 손 방향) |
 | `test_tap.py` | 마디 기하, 누르기 검출기 상태 머신, 시행 판정 지표, 세션 저장·불러오기 |
 | `test_pinch.py` | 꼬집기 판정과 키 고정, 손 역할 배정, 겹칠 때 자판 위치 유지, 주먹 지움 |
 

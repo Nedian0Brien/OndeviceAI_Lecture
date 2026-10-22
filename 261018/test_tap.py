@@ -1,4 +1,7 @@
-"""python -m unittest discover -s 261018 -p 'test_*.py' -v"""
+"""누르기 검출기(tap_detect)·평가(tap_eval)·녹화(tap_record) 검증. 합성 손(common.synthetic)을 쓴다.
+
+실행: python -m unittest discover -s 261018 -p 'test_*.py' -v
+"""
 
 import json
 from pathlib import Path
@@ -8,45 +11,18 @@ import unittest
 
 import numpy as np
 
-from tap_detect import SEGMENTS, SEGMENT_NAMES, HandFrame, Point2D, Seg, SegDip, segment_distances
+from common.hands import session_hand
+from common.landmarks import SEGMENT_NAMES, SEGMENTS
+from common.synthetic import AWAY, HEIGHT, WIDTH, landmark_list, middle, tap, to_image, world_hand
+from tap_detect import HandFrame, Point2D, Seg, SegDip, segment_distances
 from tap_eval import Score, fist_events, load_session, replay, score_trials, split
-from tap_record import Recorder, make_queue, own_slot
-
-
-WIDTH, HEIGHT = 640, 480
-FINGER_X = {5: -0.03, 9: -0.01, 13: 0.01, 17: 0.03}
-LENGTHS = (0.045, 0.028, 0.022)  # 뿌리, 중간, 끝 마디 (m)
-
-
-def world_hand(thumb):
-    """손바닥이 카메라를 향한 편 손. 손가락은 -y 방향, 손바닥 면은 z=0."""
-    points = np.zeros((21, 3))
-    points[0] = (0.0, 0.09, 0.0)
-    points[1:4] = [(-0.04, 0.07, 0.0), (-0.055, 0.05, 0.0), (-0.06, 0.03, 0.0)]
-    for base, x in FINGER_X.items():
-        y = 0.0
-        points[base] = (x, y, 0.0)
-        for step, length in enumerate(LENGTHS, start=1):
-            y -= length
-            points[base + step] = (x, y, 0.0)
-    points[4] = thumb
-    return points
+from tap_record import Recorder, make_queue
 
 
 def frame(thumb):
+    """엄지 끝이 thumb에 있는 합성 손의 HandFrame."""
     world = world_hand(np.asarray(thumb, float))
-    # 픽셀 비율이 같도록 x를 HEIGHT/WIDTH로 줄여 정규화 좌표를 만든다. 깊이(z)는 화면에 보이지 않는다.
-    image = np.column_stack([0.5 + world[:, 0] * 4 * HEIGHT / WIDTH, 0.5 + world[:, 1] * 4, world[:, 2] * 4])
-    return HandFrame(image, world, WIDTH, HEIGHT)
-
-
-def middle(name, lift=0.0):
-    a, b = SEGMENTS[name]
-    points = world_hand(np.zeros(3))
-    return (points[a] + points[b]) / 2 + (0.0, 0.0, lift)
-
-
-AWAY = (-0.08, 0.08, 0.05)
+    return HandFrame(to_image(world), world, WIDTH, HEIGHT)
 
 
 def run(detector, thumbs, step=1 / 30):
@@ -57,18 +33,6 @@ def run(detector, thumbs, step=1 / 30):
         if key is not None:
             events.append(key)
     return events
-
-
-def tap(name, frames_down=4, lift=0.0):
-    """목표 마디 옆 9mm, 위 4cm에서 내려와 닿은 뒤 같은 길로 떨어지는 궤적.
-
-    화면상으로 다른 마디를 가로지르지 않게 해서 상태 머신만 검증한다. 가로지를 때의
-    오입력은 기록 데이터 평가에서 측정한다.
-    """
-    target = middle(name, lift)
-    start = target + (0.009, 0.0, 0.04)
-    approach = [start + (target - start) * k / 6 for k in range(7)]
-    return approach + [target] * frames_down + approach[::-1]
 
 
 class GeometryTests(unittest.TestCase):
@@ -175,10 +139,6 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual((total.taps, total.hits), (3, 2))
 
 
-def landmark_list(points):
-    return [SimpleNamespace(x=x, y=y, z=z) for x, y, z in points]
-
-
 class SessionTests(unittest.TestCase):
     def write_session(self, root, name, hand="Right", placement="front"):
         path = Path(root) / name
@@ -223,11 +183,11 @@ class QueueTests(unittest.TestCase):
                          [60, 24, 12, 5, 3])
         self.assertEqual(queue, make_queue(5, 2, 1, 5, 3, seed=7))
 
-    def test_own_slot(self):
-        self.assertEqual(own_slot(["Left", ""], "Right"), 0)  # 혼자 있으면 라벨이 달라도 사용
-        self.assertEqual(own_slot(["Left", "Right"], "Right"), 1)
-        self.assertIsNone(own_slot(["Right", "Right"], "Right"))
-        self.assertIsNone(own_slot(["", ""], "Right"))
+    def test_session_hand(self):
+        self.assertEqual(session_hand(["Left", ""], "Right"), 0)  # 혼자 있으면 라벨이 달라도 사용
+        self.assertEqual(session_hand(["Left", "Right"], "Right"), 1)
+        self.assertIsNone(session_hand(["Right", "Right"], "Right"))
+        self.assertIsNone(session_hand(["", ""], "Right"))
 
 
 if __name__ == "__main__":

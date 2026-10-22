@@ -1,4 +1,7 @@
-"""기록한 세션으로 누르기 검출기를 비교한다.
+"""기록한 세션으로 누르기 검출기를 비교한다(엄지 마디 누르기 방식의 판정 비교 도구).
+
+세션은 tap_record.py가 만든다. 시행마다 정답(누르기 마디, 또는 누르지 않음)이 있으므로 검출기를 그대로
+재생해 정밀도·재현율·키 정확도·혼동 행렬을 낸다. 판정 구간은 시행 시작 0.2초 전 ~ 끝 0.3초 뒤다.
 
 예: python 261018/tap_eval.py 261018/data/tap/* --detector all
 세션은 (손, 카메라 위치) 묶음마다 가장 늦은 세션을 평가용으로 떼어 두고 나머지로 임계값을 고른다.
@@ -14,10 +17,10 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from cheonjiin import FistHold
-from project01 import classify_hand_pose
+from common.gestures import FistHold
+from common.hands import session_hand
+from common.pose import pose_from_image
 from tap_detect import SEGMENT_NAMES, HandFrame, build
-from tap_record import own_slot
 
 
 PRE, POST = 0.2, 0.3  # 안내보다 조금 일찍 누르거나 늦게 떼는 것을 허용한다.
@@ -43,7 +46,7 @@ class Session:
     trials: list
     times: np.ndarray
     hands: list  # 프레임별 HandFrame 또는 None
-    poses: list = field(default_factory=list)  # 프레임별 classify_hand_pose 결과
+    poses: list = field(default_factory=list)  # 프레임별 pose_from_image 결과
     flipped: float = 0.0  # 손이 하나인 프레임 중 좌우 라벨이 세션 손과 다른 비율
 
     @property
@@ -52,8 +55,8 @@ class Session:
 
 
 def pick_hand(labels, image, world, hand, width, height):
-    """기록 도구와 같은 규칙(own_slot)으로 세션의 손을 고른다."""
-    slot = own_slot(list(labels), hand)
+    """기록 도구와 같은 규칙(session_hand)으로 세션의 손을 고른다."""
+    slot = session_hand(list(labels), hand)
     return None if slot is None else HandFrame(image[slot], world[slot], width, height)
 
 
@@ -66,7 +69,7 @@ def load_session(path):
     hands = [pick_hand(labels, image, world, meta["hand"], width, height)
              for labels, image, world in zip(data["labels"], data["image"], data["world"])]
     poses = [None if hand is None else
-             classify_hand_pose([SimpleNamespace(x=x, y=y, z=z) for x, y, z in hand.image], width, height)
+             pose_from_image([SimpleNamespace(x=x, y=y, z=z) for x, y, z in hand.image], width, height)
              for hand in hands]
     single = [labels for labels in data["labels"] if sum(bool(label) for label in labels) == 1]
     flipped = sum(meta["hand"] not in labels for labels in single) / max(1, len(single))
@@ -88,7 +91,7 @@ def replay(detector, times, features):
 
 
 def fist_events(times, poses, hold=0.18):
-    """project01의 지움 동작(FistHold)과 같은 규칙으로 주먹 이벤트 시각을 구한다."""
+    """엄지 마디 앱의 지움 동작(FistHold)과 같은 규칙으로 주먹 이벤트 시각을 구한다."""
     gate, events = FistHold(hold), []
     for t, pose in zip(times, poses):
         if pose is None:

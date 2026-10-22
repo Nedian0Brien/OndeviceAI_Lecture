@@ -1,15 +1,16 @@
-"""python -m unittest discover -s 261018 -p 'test_*.py' -v"""
+"""꼬집기 키보드(pinch_keyboard, 방식 1) 검증: 꼬집기 판정과 키 고정, 손 역할, 겹칠 때 자판 위치 유지, 주먹 지움.
+
+실행: python -m unittest discover -s 261018 -p 'test_*.py' -v
+"""
 
 from types import SimpleNamespace
 import unittest
 
 import numpy as np
 
-from pinch_detect import PinchGate, pinch_cursor, pinch_ratio
-from pinch_keyboard import HOLD_KEYBOARD, PinchKeyboard, assign_roles
-from project01 import KEY_MAP, key_targets
-from test_project01 import detection
-from test_tap import AWAY, HEIGHT, WIDTH, landmark_list, world_hand
+from common.hand_keys import KEY_MAP, key_targets
+from common.synthetic import AWAY, HEIGHT, WIDTH, detection, landmark_list, to_image, world_hand
+from pinch_keyboard import HOLD_KEYBOARD, PinchGate, PinchKeyboard, assign_roles, pinch_cursor, pinch_ratio
 
 
 def selector(cursor, pinched=False):
@@ -17,7 +18,7 @@ def selector(cursor, pinched=False):
     world = world_hand(np.asarray(AWAY, float))
     if pinched:
         world[4] = world[8] + (0.004, 0.0, 0.0)
-    image = np.column_stack([0.5 + world[:, 0] * 4 * HEIGHT / WIDTH, 0.5 + world[:, 1] * 4, world[:, 2] * 4])
+    image = to_image(world)
     middle = (image[4, :2] + image[8, :2]) / 2
     image[:, :2] += np.asarray(cursor) - middle
     return landmark_list(image), landmark_list(world)
@@ -82,19 +83,19 @@ class RoleTests(unittest.TestCase):
 
     def test_labels_decide_when_different(self):
         left, right = ("Left", *self.hand(0.8)), ("Right", *self.hand(0.2))
-        self.assertEqual(assign_roles([right, left], "Left", WIDTH), (left, right))
-        self.assertEqual(assign_roles([right, left], "Right", WIDTH), (right, left))
+        self.assertEqual(assign_roles([right, left], "Left"), (left, right))
+        self.assertEqual(assign_roles([right, left], "Right"), (right, left))
 
     def test_screen_side_decides_when_labels_match(self):
         a, b = ("Right", *self.hand(0.2)), ("Right", *self.hand(0.8))
-        self.assertEqual(assign_roles([b, a], "Left", WIDTH), (a, b))
-        self.assertEqual(assign_roles([b, a], "Right", WIDTH), (b, a))
+        self.assertEqual(assign_roles([b, a], "Left"), (a, b))
+        self.assertEqual(assign_roles([b, a], "Right"), (b, a))
 
     def test_single_hand(self):
         hand = ("Left", *self.hand(0.5))
-        self.assertEqual(assign_roles([hand], "Left", WIDTH), (hand, None))
-        self.assertEqual(assign_roles([hand], "Right", WIDTH), (None, hand))
-        self.assertEqual(assign_roles([], "Left", WIDTH), (None, None))
+        self.assertEqual(assign_roles([hand], "Left"), (hand, None))
+        self.assertEqual(assign_roles([hand], "Right"), (None, hand))
+        self.assertEqual(assign_roles([], "Left"), (None, None))
 
 
 class PinchKeyboardTests(unittest.TestCase):

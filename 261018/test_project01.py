@@ -1,4 +1,7 @@
-"""python -m unittest discover -s 261018 -p 'test_*.py' -v"""
+"""한글 조합기, 엄지 마디 앱(project01), 공통 모듈(gestures·pose·hand_keys·hud·hands·camera) 검증.
+
+실행: python -m unittest discover -s 261018 -p 'test_*.py' -v
+"""
 
 from types import SimpleNamespace
 import unittest
@@ -6,10 +9,13 @@ from unittest.mock import Mock
 
 import numpy as np
 
-from cheonjiin import CheonjiinIME, CONSONANTS, MEDIALS, TouchGate, FistHold
-from project01 import (KEY_MAP, KEY_OF_SEGMENT, HandKeyboardTracker, classify_hand_pose, is_window_closed,
-                       key_diameter, key_targets)
-from test_tap import AWAY, HEIGHT, WIDTH, landmark_list, middle, tap, world_hand
+from korean_ime import CheonjiinIME, CONSONANTS, MEDIALS
+from common.camera import is_window_closed
+from common.gestures import FistHold, TouchGate
+from common.hand_keys import KEY_MAP, KEY_OF_SEGMENT, key_diameter, key_targets
+from common.pose import pose_from_image
+from common.synthetic import AWAY, HEIGHT, WIDTH, detection, middle, tap
+from project01 import HandKeyboardTracker
 
 
 class IMETests(unittest.TestCase):
@@ -202,21 +208,6 @@ class WindowTests(unittest.TestCase):
         self.assertFalse(is_window_closed(cv2, "Hand Cheonjiin"))
 
 
-def detection(thumb=AWAY, fist=False, mirrored=False):
-    """test_tap의 합성 손을 (이미지 landmark, world landmark)로 만든다."""
-    world = world_hand(np.asarray(thumb, float))
-    if fist:
-        for base in (5, 9, 13, 17):
-            mcp = world[base].copy()
-            world[base + 1] = mcp + (0.0, -0.03, 0.0)
-            world[base + 2] = mcp + (0.0, -0.02, -0.02)
-            world[base + 3] = mcp + (0.0, 0.005, -0.015)
-    image = np.column_stack([0.5 + world[:, 0] * 4 * HEIGHT / WIDTH, 0.5 + world[:, 1] * 4, world[:, 2] * 4])
-    if mirrored:
-        image[:, 0] = 1 - image[:, 0]
-    return landmark_list(image), landmark_list(world)
-
-
 class HandKeyboardTests(unittest.TestCase):
     STEP = 1 / 30
 
@@ -391,19 +382,19 @@ class PoseTests(unittest.TestCase):
         for mirrored in (False, True):
             for width, height in ((640, 480), (1280, 720)):
                 with self.subTest(mirrored=mirrored, size=(width, height)):
-                    self.assertEqual(classify_hand_pose(detection(mirrored=mirrored)[0], width, height), "open")
-                    self.assertEqual(classify_hand_pose(detection(mirrored=mirrored, fist=True)[0], width, height), "fist")
+                    self.assertEqual(pose_from_image(detection(mirrored=mirrored)[0], width, height), "open")
+                    self.assertEqual(pose_from_image(detection(mirrored=mirrored, fist=True)[0], width, height), "fist")
 
     def test_partial_curl_is_not_a_fist(self):
         opened = detection()[0]
         closed = detection(fist=True)[0]
         for base in (5, 9, 13):
             opened[base:base + 4] = closed[base:base + 4]
-        self.assertEqual(classify_hand_pose(opened, 640, 480), "closing")
+        self.assertEqual(pose_from_image(opened, 640, 480), "closing")
 
     def test_degenerate_points_do_not_look_like_a_fist(self):
         points = [SimpleNamespace(x=.5, y=.5) for _ in range(21)]
-        self.assertEqual(classify_hand_pose(points, 640, 480), "closing")
+        self.assertEqual(pose_from_image(points, 640, 480), "closing")
 
 
 class GeometryTests(unittest.TestCase):
@@ -432,7 +423,7 @@ class DrawingTests(unittest.TestCase):
     def test_rounded_rectangle_survives_fractional_near_circle_bounds(self):
         import random
         from PIL import Image, ImageDraw
-        from project01 import rounded_rectangle
+        from common.hud import rounded_rectangle
 
         draw = ImageDraw.Draw(Image.new("RGBA", (1280, 720)))
         # Pillow 12.3에서 ValueError가 나던 실제 좌표 (pinch_cheonjiin 1280x720 손끝 라벨)
@@ -446,7 +437,7 @@ class DrawingTests(unittest.TestCase):
 
     def test_blur_under_changes_only_masked_area(self):
         from PIL import Image, ImageDraw
-        from project01 import blur_under
+        from common.hud import blur_under
 
         rng = np.random.default_rng(0)
         picture = Image.fromarray(rng.integers(0, 255, (120, 160, 4), dtype=np.uint8), "RGBA")
@@ -464,28 +455,25 @@ class HandednessTests(unittest.TestCase):
     """MediaPipe Tasks는 입력 영상에 보이는 실제 손을 라벨로 낸다. 반전한 영상에서만 라벨을 뒤집는다."""
 
     @staticmethod
-    def fake(label):
+    def fake_result(label):
         point = SimpleNamespace(x=0.5, y=0.5, z=0.0)
-        result = SimpleNamespace(hand_landmarks=[[point] * 21], hand_world_landmarks=[[point] * 21],
-                                 handedness=[[SimpleNamespace(category_name=label, score=0.9)]])
-        detector = SimpleNamespace(detect_for_video=lambda image, timestamp: result)
-        cv2 = SimpleNamespace(cvtColor=lambda frame, code: frame, COLOR_BGR2RGB=None)
-        mp = SimpleNamespace(Image=lambda image_format, data: None, ImageFormat=SimpleNamespace(SRGB=None))
-        return cv2, mp, detector
+        return SimpleNamespace(hand_landmarks=[[point] * 21], hand_world_landmarks=[[point] * 21],
+                               handedness=[[SimpleNamespace(category_name=label, score=0.9)]])
 
     def test_label_kept_for_unmirrored_and_swapped_for_mirrored(self):
-        from project01 import detect_hands
+        from common.hands import detections_from_result
 
         for raw, mirrored, expected in (("Right", False, "Right"), ("Left", False, "Left"),
                                         ("Right", True, "Left"), ("Left", True, "Right")):
             with self.subTest(raw=raw, mirrored=mirrored):
-                cv2, mp, detector = self.fake(raw)
-                self.assertEqual(detect_hands(cv2, mp, detector, None, 1, mirrored)[0][0], expected)
+                detection = detections_from_result(self.fake_result(raw), mirrored)[0]
+                self.assertEqual(detection.label, expected)
+                self.assertEqual(detection[0], expected)  # 튜플처럼도 쓸 수 있다
 
     def test_real_landmarks_give_true_hand_and_facing(self):
         import json
         from pathlib import Path
-        from pinch_typer import palm_facing
+        from common.pose import palm_facing
 
         data = json.loads((Path(__file__).resolve().with_name("fixtures") / "handedness.json").read_text(encoding="utf-8"))
         for case in data["cases"]:

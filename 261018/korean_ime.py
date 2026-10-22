@@ -1,4 +1,19 @@
-"""카메라와 분리한 천지인 조합기와 제스처 상태 머신 (표준 라이브러리만 사용)."""
+"""한글 입력기: 천지인 자판의 키 입력을 한글 문자열로 조합한다 (표준 라이브러리만 사용, 카메라와 무관).
+
+키 번호는 휴대폰 천지인 자판을 따른다.
+  1 ㅣ   2 ㆍ   3 ㅡ
+  4 ㄱㅋㄲ  5 ㄴㄹ  6 ㄷㅌㄸ
+  7 ㅂㅍㅃ  8 ㅅㅎㅆ  9 ㅈㅊㅉ
+  0 ㅇㅁ   SPACE 공백   COMMIT 조합 경계(공백 없음)   ENTER 줄바꿈   BACK 지움
+
+- 모음은 ㅣ·ㆍ·ㅡ 획을 이어 붙여 만든다(ㅣ+ㆍ = ㅏ, ㆍ+ㅡ = ㅗ …). 아래아 ㆍ·ㆍㆍ는 조합 중에만 보인다.
+- 같은 자음 키를 cycle_seconds 안에 다시 누르면 그 그룹 안에서 다음 자음으로 바뀐다(ㄱ → ㅋ → ㄲ).
+- 자모 토큰 목록을 유지하고, 매번 `compose`로 유니코드 한글 문자열을 만든다. 받침은 다음 모음이 오면
+  다음 글자의 초성으로 옮겨 간다.
+- 지움(backspace)은 마지막 키 입력 한 번을 되돌린다(완성 글자를 통째로 지우지 않는다).
+
+손 동작 판정기(TouchGate·FistHold 등)는 common/gestures.py에 있다.
+"""
 
 from dataclasses import dataclass
 from typing import Optional
@@ -191,77 +206,3 @@ class CheonjiinIME:
         else:
             self.tokens.append(Token("B", value))
         self.last_key, self.last_time = None, float("-inf")
-
-
-class TouchGate:
-    """눌림 유지 → 한 번 입력 → 충분히 뗀 뒤 재입력. 손 유실은 release로 보지 않는다."""
-
-    def __init__(self, dwell=0.12, release=0.10):
-        self.dwell = dwell
-        self.release = release
-        self.armed = False  # 시작할 때도 엄지를 한 번 떼어야 한다.
-        self.candidate: Optional[str] = None
-        self.since = None
-        self.release_since = None
-        self.progress = 0.0
-
-    def lost(self):
-        self.armed = False
-        self.candidate = self.since = self.release_since = None
-        self.progress = 0.0
-
-    def update(self, key, fully_released, now):
-        self.progress = 0.0
-        if not self.armed:
-            if fully_released:
-                if self.release_since is None:
-                    self.release_since = now
-                if now - self.release_since >= self.release:
-                    self.armed = True
-                    self.release_since = None
-            else:
-                self.release_since = None
-            return None
-        if key is None:
-            self.candidate = self.since = None
-            return None
-        if key != self.candidate:
-            self.candidate, self.since = key, now
-        self.progress = min(1.0, (now - self.since) / self.dwell)
-        if self.progress >= 1.0:
-            self.armed = False
-            self.candidate = self.since = self.release_since = None
-            return key
-        return None
-
-
-class FistHold:
-    """주먹을 hold초 유지하면 한 번(지움). 손을 다시 펴야 다음 주먹을 센다.
-
-    처음 보이는 손이나 유실 후 돌아온 손은 먼저 펴야 한다. 주먹을 쥔 채 시작해도 지우지 않는다.
-    """
-
-    def __init__(self, hold=0.18):
-        self.hold = hold
-        self.lost()
-
-    def lost(self):
-        self.armed = False
-        self.since = None
-        self.progress = 0.0
-
-    def update(self, pose, now):
-        self.progress = 0.0
-        if pose == "open":
-            self.armed, self.since = True, None
-            return False
-        if pose != "fist" or not self.armed:
-            self.since = None
-            return False
-        if self.since is None:
-            self.since = now
-        self.progress = min(1.0, (now - self.since) / self.hold)
-        if self.progress >= 1.0:
-            self.armed, self.since = False, None
-            return True
-        return False

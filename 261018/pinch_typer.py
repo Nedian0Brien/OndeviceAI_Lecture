@@ -12,37 +12,47 @@
 - 같은 손가락을 다시 꼬집으면 그룹 안에서 순환하고, 다른 버튼을 꼬집으면 앞 후보가 확정된다(C 규칙).
 - 왼손 주먹: 후보가 있으면 확정, 없으면 공백. 오른손 주먹: 지움(후보가 있으면 후보 취소).
 - 오른손 손등: 마우스 모드. 오른손 검지 꼬집기 유지 = 커서 이동, 왼손 검지 꼬집기 = 클릭(1회 좌, 2회 우, 유지 = 누름).
+
+구성
+  landmark → 신호   pinch_ratios, hand_signal → HandSignal
+  손 하나의 판정기  FingerPinch(어느 손가락을 꼬집었나), common.gestures의 Orientation(손바닥/손등)·FistHold(주먹)
+  양손 입력기       PinchTyper.update: 프레임마다 양손 신호를 받아 이벤트 목록을 돌려준다.
+  고정 데이터 재생  replay: 카메라 없이 꼬집기·주먹 순서만으로 입력을 재현한다(--demo, 테스트).
 """
 
 from dataclasses import dataclass
 import math
 from typing import Optional
 
-from cheonjiin import CONSONANTS, CheonjiinIME, FistHold, PreparedKey
+from korean_ime import CONSONANTS, CheonjiinIME, PreparedKey
+from common.gestures import FACING_DWELL, FACING_THRESHOLD, FistHold, Kalman1D, Orientation
+from common.landmarks import DISTAL_SEGMENTS, INDEX_MCP, MIDDLE_MCP, THUMB_TIP, WRIST, point_segment_distance, xyz
+from common.pose import CURL_ANGLE, finger_angles, palm_facing, pose_from_angles
 
 
-FINGERS = ("검지", "중지", "약지", "소지")
-TIPS = (8, 12, 16, 20)
 HANDS = ("Left", "Right")
+# 손가락(검지·중지·약지·소지) 순서의 키. 왼손은 모음과 쉬프트, 오른손은 자음 그룹이다.
 LEFT_KEYS = ("1", "2", "3", "SHIFT")
 RIGHT_KEYS = ("4", "5", "6", "0")
 RIGHT_SHIFT_KEYS = ("7", "8", "9", "PUNCT")
 PUNCTUATION = (".", ",", "?", "!", "\n")
 VOWEL_LABELS = {"1": "ㅣ", "2": "ㆍ", "3": "ㅡ"}
 
-DISTAL = ((7, 8), (11, 12), (15, 16), (19, 20))  # 손가락 끝마디(DIP→TIP)
 # 꼬집기 거리: 엄지 끝(4)~손가락 끝마디 선분 world 거리 / 손목~중지 뿌리 길이(약 9~10cm).
 # landmark는 뼈 축 위에 있어서 살이 맞닿아도 0이 되지 않는다(엄지·손가락 두께만큼 남는다).
 # 판정값은 모든 사람에게 같은 고정값이다. 사용자별 보정 단계는 두지 않는다(2026-10-20 결정).
-# 아래 값은 실측 로그(--log)로 다시 정할 임시값이다.
+#   PINCH_ENTER: 이 값 아래면 접촉 시작   PINCH_EXIT: 이 값 위로 벌리면 항상 뗌
+#   PINCH_MARGIN: 가장 가까운 손끝이 두 번째보다 이만큼 가까워야 그 손가락으로 본다
+#   PINCH_MIN_CONTACT: 이보다 짧은 접촉(초)은 버린다
+# 손가락마다 4번씩 꼬집은 2026-10-22 로그(37초)에서 32/32 입력, 오입력 0이었다.
 PINCH_ENTER, PINCH_EXIT, PINCH_MARGIN, PINCH_MIN_CONTACT = 0.25, 0.38, 0.03, 0.04
 # 떼기: exit 위로 벌리면 항상 뗌. 빠르게 연속으로 꼬집을 때는 exit까지 벌리지 않으므로(2026-10-22 로그: 0.33~0.37),
 # 접촉 중 가장 낮았던 값보다 RELEASE_RISE 이상 올라가고 enter + RELEASE_FLOOR를 넘어도 뗀 것으로 본다.
 # landmark가 한 프레임만 튀는 경우(같은 로그: 0.17 → 0.58 → 0.18)를 떼기로 세지 않도록 RELEASE_FRAMES 연속을 요구한다.
 RELEASE_RISE, RELEASE_FLOOR, RELEASE_FRAMES = 0.12, 0.05, 2
-FACING_THRESHOLD, FACING_DWELL = 0.25, 0.15
+# 마우스: 꼬집기가 TAP_MAX초보다 짧으면 클릭, 두 번째 클릭이 DOUBLE_WINDOW초 안이면 우클릭.
+# 커서는 손 이동량 × CURSOR_GAIN만큼 움직이고, 꼬집은 직후 CURSOR_SETTLE초의 흔들림은 버린다.
 TAP_MAX, DOUBLE_WINDOW, CURSOR_GAIN, CURSOR_SETTLE = 0.25, 0.35, 2.0, 0.06
-CURL_ANGLE, EXTEND_ANGLE = 130.0, 155.0
 
 
 def group_of(key):
@@ -64,90 +74,37 @@ def key_label(key):
 
 @dataclass
 class HandSignal:
-    ratios: tuple  # 검지·중지·약지·소지 끝까지의 꼬집기 비율
-    curled: tuple = (False, False, False, False)
+    """상태 머신이 받는 손 하나의 신호. 카메라·MediaPipe와 무관한 값만 담는다."""
+    ratios: tuple  # 검지·중지·약지·소지 끝마디까지의 꼬집기 비율(pinch_ratios)
+    curled: tuple = (False, False, False, False)  # 손가락별 굽음(world PIP 각도 ≤ CURL_ANGLE)
     pose: str = "open"  # open / closing / fist
-    facing: float = 1.0  # > 0 손바닥, < 0 손등이 카메라를 향함
+    facing: float = 1.0  # > 0 손바닥, < 0 손등이 카메라를 향함(common.pose.palm_facing)
     anchor: tuple = (0.5, 0.5)  # 커서 기준점(검지 뿌리)의 정규화 이미지 좌표
-
-
-def _xyz(point):
-    return (point.x, point.y, getattr(point, "z", 0.0))
-
-
-def point_segment_distance(point, a, b):
-    ab = [y - x for x, y in zip(a, b)]
-    length = sum(v * v for v in ab)
-    t = 0.0 if length < 1e-12 else max(0.0, min(1.0, sum((p - x) * v for p, x, v in zip(point, a, ab)) / length))
-    return math.dist(point, [x + t * v for x, v in zip(a, ab)])
 
 
 def pinch_ratios(world):
     """엄지 끝(4)~각 손가락 끝마디 선분(DIP→TIP) 거리 / 손목(0)~중지 뿌리(9) 길이. 검지·중지·약지·소지.
 
     손끝 점끼리 재면 손가락 지문 면(끝마디 가운데)이 닿아도 거리가 크게 남는다. 선분까지 재면 끝마디
-    어디에 닿든 같은 기준이 된다.
+    어디에 닿든 같은 기준이 된다. 손 크기로 나눠 사람·거리에 따른 차이를 없앤다.
     """
-    scale = max(math.dist(_xyz(world[0]), _xyz(world[9])), 1e-6)
-    thumb = _xyz(world[4])
-    return tuple(point_segment_distance(thumb, _xyz(world[a]), _xyz(world[b])) / scale for a, b in DISTAL)
-
-
-def finger_angles(world):
-    """손가락별 PIP 관절 각도(도). 180°에 가까울수록 펴져 있다. 3D world 좌표라 깊이 방향 굽힘도 잡힌다."""
-    angles = []
-    for base in (5, 9, 13, 17):
-        mcp, pip, dip = (_xyz(world[base + i]) for i in range(3))
-        first = [a - b for a, b in zip(mcp, pip)]
-        second = [a - b for a, b in zip(dip, pip)]
-        norm = math.hypot(*first) * math.hypot(*second)
-        if norm < 1e-12:
-            angles.append(180.0)
-            continue
-        cosine = sum(a * b for a, b in zip(first, second)) / norm
-        angles.append(math.degrees(math.acos(max(-1.0, min(1.0, cosine)))))
-    return tuple(angles)
-
-
-def pose_from_angles(angles):
-    curled = sum(angle <= CURL_ANGLE for angle in angles)
-    extended = sum(angle >= EXTEND_ANGLE for angle in angles)
-    if curled >= 3 and extended == 0:
-        return "fist"
-    if extended >= 3 and curled == 0:
-        return "open"
-    return "closing"
-
-
-def palm_facing(landmarks, label, mirrored=False, width=1.0, height=1.0):
-    """손바닥이 카메라를 향하면 양수, 손등이면 음수(-1~1).
-
-    손목→검지 뿌리, 손목→소지 뿌리 두 벡터의 2D 외적(sin)이다. 이미지 평면 안의 회전에는 변하지 않고,
-    거울상(왼손↔오른손, 좌우 반전 영상)에서만 부호가 바뀐다. 그래서 좌우 라벨과 반전 여부로 부호를 맞춘다.
-    """
-    wrist = landmarks[0]
-    a = ((landmarks[5].x - wrist.x) * width, (landmarks[5].y - wrist.y) * height)
-    b = ((landmarks[17].x - wrist.x) * width, (landmarks[17].y - wrist.y) * height)
-    norm = math.hypot(*a) * math.hypot(*b)
-    if norm < 1e-12:
-        return 0.0
-    value = -(a[0] * b[1] - a[1] * b[0]) / norm  # 오른손 손바닥(엄지가 보는 사람 기준 오른쪽)이 양수
-    if label == "Left":
-        value = -value
-    if mirrored:
-        value = -value
-    return value
+    scale = max(math.dist(xyz(world[WRIST]), xyz(world[MIDDLE_MCP])), 1e-6)
+    thumb = xyz(world[THUMB_TIP])
+    return tuple(point_segment_distance(thumb, xyz(world[a]), xyz(world[b])) / scale for a, b in DISTAL_SEGMENTS)
 
 
 def hand_signal(label, landmarks, world, mirrored=False, width=1.0, height=1.0, pose=None):
-    """한 손의 이미지 landmark(정규화 좌표)와 world landmark로 HandSignal을 만든다."""
+    """한 손의 이미지 landmark(정규화 좌표)와 world landmark로 HandSignal을 만든다.
+
+    label: 실제 왼손/오른손(손바닥 방향 부호에 쓴다). pose를 주지 않으면 world 각도로 자세를 정한다.
+    """
     angles = finger_angles(world)
     return HandSignal(
         ratios=pinch_ratios(world),
         curled=tuple(angle <= CURL_ANGLE for angle in angles),
         pose=pose or pose_from_angles(angles),
         facing=palm_facing(landmarks, label, mirrored, width, height),
-        anchor=(landmarks[5].x, landmarks[5].y),
+        anchor=(landmarks[INDEX_MCP].x, landmarks[INDEX_MCP].y),
     )
 
 
@@ -219,76 +176,6 @@ class FingerPinch:
         return finger, duration
 
 
-class Orientation:
-    """손바닥(palm) / 손등(back) / 회전 중(turning). 바뀐 방향은 dwell초 유지되어야 인정한다.
-
-    인정한 방향은 새 방향(turning 포함)이 dwell초 이어질 때까지 유지한다. landmark가 한 프레임만 튀어
-    방향 값이 흔들려도(2026-10-22 로그: +0.6 → -0.23 → +0.6) 입력이 끊기지 않게 하기 위해서다.
-    """
-
-    def __init__(self, threshold=FACING_THRESHOLD, dwell=FACING_DWELL):
-        self.threshold, self.dwell = threshold, dwell
-        self.lost()
-
-    def lost(self):
-        self.state: Optional[str] = None
-        self.raw: Optional[str] = None
-        self.since: Optional[float] = None
-
-    def update(self, facing, now):
-        if facing is None:
-            self.lost()
-            return None
-        # 히스테리시스: 이미 인정한 방향은 임계값의 절반까지 유지한다.
-        if self.state == "palm" and facing > self.threshold / 2:
-            return self.state
-        if self.state == "back" and facing < -self.threshold / 2:
-            return self.state
-        raw = "palm" if facing > self.threshold else ("back" if facing < -self.threshold else "turning")
-        if raw != self.raw:
-            self.raw, self.since = raw, now
-        if now - self.since >= self.dwell:
-            self.state = raw
-        elif self.state is None:
-            self.state = "turning"
-        return self.state
-
-
-class Kalman1D:
-    """위치·속도 상태의 1차원 칼만 필터(등속도 모델). 커서 기준점의 떨림을 줄인다.
-
-    수업 위키 docs/wiki/Kalman-Filter.md의 예측(predict)·보정(update) 두 단계를 그대로 쓴다.
-    q: 가속도 잡음 세기(클수록 빠른 움직임을 따라감), r: 측정 잡음 분산(클수록 부드러움).
-    """
-
-    def __init__(self, q=2.0, r=4e-5):
-        self.q, self.r = q, r
-        self.reset(0.0, None)
-
-    def reset(self, value, now):
-        self.x, self.v = value, 0.0
-        self.p = [[self.r, 0.0], [0.0, 1.0]]
-        self.t = now
-
-    def update(self, z, now):
-        dt = 1 / 30 if self.t is None else max(now - self.t, 1e-3)
-        self.t = now
-        q, p = self.q, self.p
-        # 예측: x' = x + v·dt, P' = F P Fᵀ + Q
-        x = self.x + self.v * dt
-        p00 = p[0][0] + dt * (p[1][0] + p[0][1]) + dt * dt * p[1][1] + q * dt ** 3 / 3
-        p01 = p[0][1] + dt * p[1][1] + q * dt * dt / 2
-        p10 = p[1][0] + dt * p[1][1] + q * dt * dt / 2
-        p11 = p[1][1] + q * dt
-        # 보정: 위치만 측정한다(H = [1, 0]).
-        s = p00 + self.r
-        k0, k1 = p00 / s, p10 / s
-        error = z - x
-        self.x, self.v = x + k0 * error, self.v + k1 * error
-        self.p = [[(1 - k0) * p00, (1 - k0) * p01], [p10 - k1 * p00, p11 - k1 * p01]]
-        return self.x
-
-
 # ---------------------------------------------------------------------------
 # 양손 입력기
 
@@ -302,6 +189,8 @@ class Pending:
 
 
 class HandState:
+    """손 하나의 판정기 묶음과 직전 신호."""
+
     def __init__(self, pinch, orientation, fist):
         self.pinch, self.orientation, self.fist = pinch, orientation, fist
         self.signal: Optional[HandSignal] = None
@@ -388,6 +277,7 @@ class PinchTyper:
         return [("delete", None)]
 
     def _put(self, key, value, now, replace=None):
+        """조합기에 자모(또는 문장부호)를 넣는다. replace가 있으면 마지막 후보를 value로 바꾼다(순환)."""
         if key == "PUNCT":
             self.ime.put_symbol(value, replace=replace is not None)
             return
@@ -406,7 +296,15 @@ class PinchTyper:
         self.taps, self.clutch, self.button_down = [], None, False
 
     def update(self, signals, now):
-        """signals: {"Left": HandSignal|None, "Right": HandSignal|None}"""
+        """signals: {"Left": HandSignal|None, "Right": HandSignal|None}. 이번 프레임의 이벤트 목록을 돌려준다.
+
+        1) 양손의 손바닥 방향을 갱신하고, 오른손이 손등이면 마우스 모드, 아니면 키보드 모드로 둔다.
+        2) 손마다 꼬집기(FingerPinch)와 주먹(FistHold)을 갱신한다.
+        3) 꼬집기는 접촉을 시작할 때와 뗄 때 모두 기대 방향(키보드=손바닥, 마우스=손등)이어야 입력으로 인정한다.
+           손을 뒤집는 도중의 꼬집기를 입력으로 세지 않기 위해서다.
+        4) 키보드 모드: 꼬집기 → press_finger, 손바닥 주먹 → make_fist
+           마우스 모드: 오른손 → 커서 이동(_move), 왼손 → 클릭(_click)
+        """
         events = []
         for label, hand in self.hands.items():
             hand.signal = signals.get(label)
@@ -417,8 +315,8 @@ class PinchTyper:
         expected = "palm" if self.mode == "keyboard" else "back"
         for label, hand in self.hands.items():
             signal, state = hand.signal, hand.orientation.state
-            tap = hand.pinch.update(signal, now)
-            contact = hand.contact
+            tap = hand.pinch.update(signal, now)  # 손가락을 뗀 프레임에서 (손가락, 접촉 시간)
+            contact = hand.contact  # 이번 접촉을 시작할 때의 손 방향
             if tap is not None or hand.pinch.active is None:
                 hand.contact = None
             elif hand.contact is None:
@@ -438,12 +336,14 @@ class PinchTyper:
                 self._move(hand, now, events)
             else:
                 self._click(hand, tap if valid else None, now, events)
+        # 마우스: 첫 클릭 뒤 double_window초 안에 두 번째가 없으면 좌클릭으로 확정한다.
         if self.mode == "mouse" and len(self.taps) == 1 and now - self.taps[0] > self.double_window:
             self.taps = []
             events.append(("click", "left"))
         return events
 
     def _switch(self, mode, events):
+        """키보드 ↔ 마우스 전환. 확정 전 후보·쉬프트·클릭 대기·누른 버튼을 모두 정리한다."""
         self.mode = mode
         self.pending, self.shift = None, False
         self.taps, self.clutch = [], None

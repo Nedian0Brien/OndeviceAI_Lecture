@@ -1,23 +1,23 @@
 """엄지로 손가락 마디를 누르는 순간과 누른 마디를 찾는 검출기 (numpy만 사용).
 
+엄지 마디 앱(project01.py)이 `Seg`(world 거리 방식)를 쓰고, 녹화·평가 도구(tap_record.py, tap_eval.py)가
+세 방식을 비교한다.
+- `Point2D`: 비교 기준. 2D 거리로 마디 중점에 머무르면 입력(TouchGate)
+- `Seg`: 엄지 끝~마디 선분 거리가 enter 안에 dwell초 머무르면 입력, exit 밖으로 떨어지면 재준비
+- `SegDip`: 거리 곡선이 내려갔다 다시 올라오는 골을 누르기로 본다(엄지를 띄운 채 멈추면 입력되지 않음)
+`Seg`·`SegDip`은 거리를 world 좌표(미터) 또는 이미지 좌표(손바닥 크기로 나눈 값)로 잴 수 있다.
+평가에서 같은 프레임을 여러 파라미터로 돌리므로, 거리 계산(features)과 상태 머신(step)을 나눴다.
+
 마디 이름은 손가락(I 검지, M 중지, R 약지, P 소지)과 위치(1 끝, 2 중간, 3 뿌리)로 붙인다.
 검출기는 프레임마다 update(t, hand)를 받고, 누르기를 판정한 프레임에서 마디 이름을 돌려준다.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 
-from cheonjiin import TouchGate
-
-
-THUMB_TIP = 4
-FINGERS = (("I", 5), ("M", 9), ("R", 13), ("P", 17))
-# 끝 마디 DIP-TIP, 중간 마디 PIP-DIP, 뿌리 마디 MCP-PIP
-SEGMENTS = {f"{finger}{row}": (base + 3 - row, base + 4 - row)
-            for finger, base in FINGERS for row in (1, 2, 3)}
-SEGMENT_NAMES = tuple(SEGMENTS)
+from common.gestures import TouchGate
+from common.landmarks import SEGMENT_NAMES, SEGMENTS, THUMB_TIP  # 마디 이름 규칙은 common/landmarks.py
 
 
 def as_points(landmarks):

@@ -4,8 +4,12 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-from cheonjiin import CheonjiinIME, CONSONANTS, MEDIALS, TouchGate, FistGate
-from project01 import HandKeyboardTracker, classify_hand_pose, contact_geometry, is_window_closed, key_diameter, key_layout
+import numpy as np
+
+from cheonjiin import CheonjiinIME, CONSONANTS, MEDIALS, TouchGate, FistHold
+from project01 import (KEY_MAP, KEY_OF_SEGMENT, HandKeyboardTracker, classify_hand_pose, is_window_closed,
+                       key_diameter, key_targets)
+from test_tap import AWAY, HEIGHT, WIDTH, landmark_list, middle, tap, world_hand
 
 
 class IMETests(unittest.TestCase):
@@ -198,193 +202,170 @@ class WindowTests(unittest.TestCase):
         self.assertFalse(is_window_closed(cv2, "Hand Cheonjiin"))
 
 
+def detection(thumb=AWAY, fist=False, mirrored=False):
+    """test_tap의 합성 손을 (이미지 landmark, world landmark)로 만든다."""
+    world = world_hand(np.asarray(thumb, float))
+    if fist:
+        for base in (5, 9, 13, 17):
+            mcp = world[base].copy()
+            world[base + 1] = mcp + (0.0, -0.03, 0.0)
+            world[base + 2] = mcp + (0.0, -0.02, -0.02)
+            world[base + 3] = mcp + (0.0, 0.005, -0.015)
+    image = np.column_stack([0.5 + world[:, 0] * 4 * HEIGHT / WIDTH, 0.5 + world[:, 1] * 4, world[:, 2] * 4])
+    if mirrored:
+        image[:, 0] = 1 - image[:, 0]
+    return landmark_list(image), landmark_list(world)
+
+
 class HandKeyboardTests(unittest.TestCase):
-    @staticmethod
-    def hand(contact=False, mirrored=False, fist=False, key="1"):
-        landmarks = GeometryTests.hand()
-        if fist:
-            for base in (5, 9, 13, 17):
-                x = landmarks[base].x
-                landmarks[base + 2] = SimpleNamespace(x=x, y=.68)
-                landmarks[base + 3] = SimpleNamespace(x=x, y=.73)
-        if mirrored:
-            landmarks = [SimpleNamespace(x=1 - p.x, y=p.y) for p in landmarks]
-        if contact:
-            index = next(index for actual, _, index in key_layout(landmarks) if actual == key)
-            landmarks[4] = SimpleNamespace(x=landmarks[index].x, y=landmarks[index].y)
-        else:
-            landmarks[4] = SimpleNamespace(x=0.0, y=0.0)
-        return landmarks
+    STEP = 1 / 30
 
-    def test_default_and_auto_keep_both_hands_after_first_detection(self):
-        for mode in ("both", "auto"):
-            with self.subTest(mode=mode):
-                tracker = HandKeyboardTracker(mode)
-                tracker.update([("Left", self.hand())], 640, 480, .16, 0)
-                views, _ = tracker.update([("Right", self.hand(mirrored=True)), ("Left", self.hand())],
-                                          640, 480, .16, .11)
-                self.assertEqual({v.label for v in views}, {"Left", "Right"})
+    def feed(self, tracker, frames, start=0.0, enabled=True):
+        """frames: 프레임마다 [(라벨, thumb 또는 dict(thumb=, fist=))]. 이벤트를 모아 돌려준다."""
+        events = []
+        for index, hands in enumerate(frames):
+            detections = []
+            for label, spec in hands:
+                spec = spec if isinstance(spec, dict) else {"thumb": spec}
+                image, world = detection(**spec)
+                detections.append((label, image, world))
+            _, found = tracker.update(detections, WIDTH, HEIGHT, start + index * self.STEP, enabled=enabled)
+            events.extend(found)
+        return events
 
-    def test_right_hand_alone_can_type(self):
+    def test_layout_maps_every_segment_once(self):
+        self.assertEqual(len(KEY_MAP), 12)
+        self.assertEqual(KEY_OF_SEGMENT["I1"], "1")
+        self.assertEqual(KEY_OF_SEGMENT["P2"], "SPACE")
+        self.assertEqual(len(set(KEY_OF_SEGMENT.values())), 12)
+
+    def test_each_segment_types_its_key_once(self):
+        for segment, key, _ in KEY_MAP:
+            with self.subTest(segment=segment):
+                tracker = HandKeyboardTracker()
+                frames = [[("Right", AWAY)]] * 3 + [[("Right", thumb)] for thumb in tap(segment)]
+                self.assertEqual(self.feed(tracker, frames), [("Right", key)])
+
+    def test_hovering_thumb_does_not_type(self):
         tracker = HandKeyboardTracker()
-        for now in (0.0, .11):
-            tracker.update([("Right", self.hand(mirrored=True))], 640, 480, .16, now)
-        tracker.update([("Right", self.hand(contact=True, mirrored=True))], 640, 480, .16, .2)
-        _, events = tracker.update([("Right", self.hand(contact=True, mirrored=True))], 640, 480, .16, .34)
-        self.assertEqual(events, [])  # 손가락에 엄지를 대기만 해서는 입력되지 않는다.
-        for now in (.4, .6):
-            _, events = tracker.update([("Right", self.hand(mirrored=True, fist=True))], 640, 480, .16, now)
-        self.assertEqual(events, [("Right", "1")])
+        frames = [[("Right", AWAY)]] * 3 + [[("Right", thumb)] for thumb in tap("M1", frames_down=30, lift=0.03)]
+        self.assertEqual(self.feed(tracker, frames), [])
 
-    def test_hands_have_independent_release_and_detection_order(self):
+    def test_fist_deletes_once_until_hand_opens(self):
         tracker = HandKeyboardTracker()
-        for now in (0.0, .11):
-            tracker.update([("Left", self.hand()), ("Right", self.hand(mirrored=True))], 640, 480, .16, now)
-        for now in (.2, .34):
-            views, events = tracker.update([("Right", self.hand(mirrored=True)), ("Left", self.hand(contact=True))],
-                                           640, 480, .16, now)
-        self.assertEqual(events, [])
-        for now in (.4, .6):
-            _, events = tracker.update([("Right", self.hand(mirrored=True)), ("Left", self.hand(fist=True))],
-                                       640, 480, .16, now)
-        self.assertEqual(events, [("Left", "1")])
-        self.assertTrue(tracker.gates["Right"].armed)
-        self.assertFalse(tracker.gates["Left"].armed)
-        for now in (.7, .9):
-            _, events = tracker.update([("Left", self.hand(fist=True)), ("Right", self.hand(fist=True, mirrored=True))],
-                                       640, 480, .16, now)
-        self.assertEqual(events, [("Right", "1")])
-        self.assertEqual(tracker.last_press["Left"], ("1", .6))
+        fist = {"thumb": AWAY, "fist": True}
+        frames = [[("Right", AWAY)]] * 3 + [[("Right", fist)]] * 30
+        self.assertEqual(self.feed(tracker, frames), [("Right", "BACK")])
+        frames = [[("Right", AWAY)]] * 3 + [[("Right", fist)]] * 8
+        self.assertEqual(self.feed(tracker, frames, start=2.0), [("Right", "BACK")])
+
+    def test_starting_with_fist_does_not_delete(self):
+        tracker = HandKeyboardTracker()
+        frames = [[("Right", {"thumb": AWAY, "fist": True})]] * 30
+        self.assertEqual(self.feed(tracker, frames), [])
+
+    def test_thumb_on_segment_during_fist_does_not_type(self):
+        tracker = HandKeyboardTracker()
+        frames = ([[("Right", AWAY)]] * 3 + [[("Right", {"thumb": middle("I2"), "fist": True})]] * 10
+                  + [[("Right", middle("I2"))]] * 5)
+        # 주먹으로 지움 한 번. 주먹을 풀었을 때 엄지가 마디에 닿아 있어도, 떼기 전에는 입력하지 않는다.
+        self.assertEqual(self.feed(tracker, frames), [("Right", "BACK")])
+
+    def test_hands_type_independently_in_any_detection_order(self):
+        tracker = HandKeyboardTracker()
+        frames = [[("Left", AWAY), ("Right", AWAY)]] * 3
+        frames += [[("Right", AWAY), ("Left", thumb)] for thumb in tap("I1")]
+        frames += [[("Left", thumb), ("Right", thumb)] for thumb in tap("R1")]
+        self.assertEqual(self.feed(tracker, frames), [("Left", "1"), ("Left", "3"), ("Right", "3")])
+        self.assertEqual(tracker.last_press["Right"][0], "3")
 
     def test_hand_loss_requires_release_when_it_returns(self):
         tracker = HandKeyboardTracker()
-        for now in (0.0, .11):
-            tracker.update([("Right", self.hand(mirrored=True))], 640, 480, .16, now)
-        tracker.update([], 640, 480, .16, .2)
-        for now in (.3, 1.0):
-            _, events = tracker.update([("Right", self.hand(fist=True, mirrored=True))], 640, 480, .16, now)
-            self.assertEqual(events, [])
+        approach = tap("M2")[:7]
+        frames = [[("Right", AWAY)]] * 3 + [[("Right", thumb)] for thumb in approach] + [[]]
+        frames += [[("Right", middle("M2"))]] * 10
+        self.assertEqual(self.feed(tracker, frames), [])
 
     def test_explicit_hand_filter(self):
         for mode, expected in (("left", "Left"), ("right", "Right")):
             with self.subTest(mode=mode):
                 tracker = HandKeyboardTracker(mode)
-                views, _ = tracker.update([("Left", self.hand()), ("Right", self.hand(mirrored=True))],
-                                          640, 480, .16, 0)
+                image, world = detection()
+                views, _ = tracker.update([("Left", image, world), ("Right", image, world)], WIDTH, HEIGHT, 0)
                 self.assertEqual([v.label for v in views], [expected])
-
-    def test_nearest_key_highlights_before_contact_without_typing(self):
-        tracker = HandKeyboardTracker()
-        for now in (0.0, .11, .2):
-            tracker.update([("Right", self.hand())], 640, 480, .16, now)
-        views, events = tracker.update([("Right", self.hand())], 640, 480, .16, .5)
-        hand = views[0]
-        self.assertTrue(hand.gate.armed)
-        self.assertIsNone(hand.candidate)
-        self.assertIsNotNone(hand.nearest)
-        self.assertEqual(hand.gate.selected, hand.nearest)
-        self.assertEqual(events, [])
-        self.assertEqual(hand.focus[hand.nearest], 1.0)
-        _, _, index, _, _ = next(t for t in hand.targets if t[0] == hand.nearest)
-        self.assertGreater(key_diameter(hand.targets, hand.points, index, hand.focus[hand.nearest], 1),
-                           key_diameter(hand.targets, hand.points, index, 0, 1))
 
     def test_duplicate_handedness_is_visible_but_cannot_type(self):
         tracker = HandKeyboardTracker()
-        for now in (0.0, .11):
-            tracker.update([("Left", self.hand())], 640, 480, .16, now)
-        for now in (.2, .34):
-            views, events = tracker.update([("Left", self.hand(contact=True)), ("Left", self.hand(mirrored=True))],
-                                           640, 480, .16, now)
-            self.assertEqual(len(views), 2)
-            self.assertEqual(events, [])
-            self.assertFalse(tracker.gates["Left"].armed)
+        frames = [[("Left", AWAY)]] * 3 + [[("Left", thumb), ("Left", AWAY)] for thumb in tap("I1")]
+        self.assertEqual(self.feed(tracker, frames), [])
+        image, world = detection()
+        views, _ = tracker.update([("Left", image, world), ("Left", image, world)], WIDTH, HEIGHT, 5.0)
+        self.assertEqual(len(views), 2)
 
-    def test_pause_resets_both_gates_and_requires_release(self):
+    def test_pause_resets_and_requires_release(self):
         tracker = HandKeyboardTracker()
-        for now in (0.0, .11):
-            tracker.update([("Left", self.hand()), ("Right", self.hand(mirrored=True))], 640, 480, .16, now)
+        self.feed(tracker, [[("Right", AWAY)]] * 3)
         tracker.reset()
-        for now in (.2, .5):
-            _, events = tracker.update([("Left", self.hand(fist=True)), ("Right", self.hand(fist=True, mirrored=True))],
-                                       640, 480, .16, now)
-            self.assertEqual(events, [])
+        frames = [[("Right", middle("I1"))]] * 10
+        self.assertEqual(self.feed(tracker, frames, start=1.0), [])
+        self.assertEqual(self.feed(tracker, frames, start=2.0, enabled=False), [])
 
-    def test_preview_latches_when_fist_starts_and_survives_cycle_timeout(self):
+    def test_tap_threshold_can_be_changed(self):
         tracker = HandKeyboardTracker()
-        ime = CheonjiinIME()
-        ime.press("4", 0.0)
-        for now in (.1, .21, .3, .44):
-            tracker.update([("Right", self.hand(contact=True, mirrored=True, key="4"))],
-                           640, 480, .16, now, ime=ime)
-        views, _ = tracker.update([("Right", self.hand(mirrored=True, fist=True))],
-                                  640, 480, .16, .8, ime=ime)
-        self.assertEqual(views[0].pending_label, "ㅋ")
-        _, events = tracker.update([("Right", self.hand(mirrored=True, fist=True))],
-                                   640, 480, .16, 1.0, ime=ime)
-        self.assertEqual(events, [("Right", "4")])
-        ime.press("4", 1.0, prepared=tracker.pending["Right"])
-        self.assertEqual(ime.text, "ㅋ")
+        hover = [[("Right", AWAY)]] * 3 + [[("Right", thumb)] for thumb in tap("M1", lift=0.015)]
+        self.assertEqual(self.feed(tracker, hover), [])
+        tracker.set_tap(0.02, 0.03)
+        self.assertEqual(self.feed(tracker, hover, start=2.0), [("Right", "2")])
+
+    def test_nearest_key_is_highlighted_without_typing(self):
+        tracker = HandKeyboardTracker()
+        frames = [[("Right", AWAY)]] * 3 + [[("Right", middle("R3", 0.03))]] * 20
+        self.assertEqual(self.feed(tracker, frames), [])
+        image, world = detection(middle("R3", 0.03))
+        views, _ = tracker.update([("Right", image, world)], WIDTH, HEIGHT, 5.0)
+        hand = views[0]
+        self.assertEqual(hand.nearest, "9")
+        self.assertGreater(hand.focus["9"], 0.99)
+        _, _, index, _, _ = next(t for t in hand.targets if t[0] == "9")
+        self.assertGreater(key_diameter(hand.targets, hand.points, index, hand.focus["9"], 1),
+                           key_diameter(hand.targets, hand.points, index, 0, 1))
 
 
-class FistTests(unittest.TestCase):
-    def setUp(self):
-        self.gate = FistGate()
+class FistHoldTests(unittest.TestCase):
+    def test_hold_fires_once_until_opened(self):
+        gate = FistHold(hold=0.18)
+        self.assertFalse(gate.update("open", 0.0))
+        self.assertFalse(gate.update("fist", 0.1))
+        self.assertTrue(gate.update("fist", 0.3))
+        self.assertFalse(gate.update("fist", 5.0))
+        self.assertFalse(gate.update("closing", 6.0))
+        gate.update("open", 6.1)
+        gate.update("fist", 6.2)
+        self.assertTrue(gate.update("fist", 6.4))
 
-    def select(self, key="4", start=0.0):
-        for delta in (0.0, .11, .2, .34):
-            self.assertIsNone(self.gate.update(key, "open", start + delta))
-        self.assertEqual(self.gate.selected, key)
+    def test_starting_with_fist_and_loss_need_open_hand(self):
+        gate = FistHold()
+        self.assertFalse(gate.update("fist", 0.0))
+        self.assertFalse(gate.update("fist", 1.0))
+        gate.update("open", 1.1)
+        gate.lost()
+        self.assertFalse(gate.update("fist", 2.0))
+        self.assertFalse(gate.update("fist", 3.0))
 
-    def test_starting_with_fist_does_not_type(self):
-        for now in (0.0, .5, 2.0):
-            self.assertIsNone(self.gate.update("4", "fist", now))
-        self.assertIsNone(self.gate.selected)
+    def test_fist_must_be_continuous_and_reports_progress(self):
+        gate = FistHold(hold=0.2)
+        gate.update("open", 0.0)
+        gate.update("fist", 0.1)
+        gate.update("fist", 0.2)
+        self.assertAlmostEqual(gate.progress, 0.5)
+        gate.update("closing", 0.25)
+        self.assertEqual(gate.progress, 0.0)
+        gate.update("fist", 0.3)
+        self.assertFalse(gate.update("fist", 0.45))
+        self.assertTrue(gate.update("fist", 0.5))
 
-    def test_selecting_and_holding_open_never_types(self):
-        self.select()
-        self.assertIsNone(self.gate.update("4", "open", 10.0))
-        self.assertTrue(self.gate.armed)
 
-    def test_selection_is_frozen_during_closing(self):
-        self.select("4")
-        self.gate.update("9", "closing", .4)
-        self.assertEqual(self.gate.selected, "4")
-        self.gate.update("0", "fist", .5)
-        self.assertEqual(self.gate.update("BACK", "fist", .7), "4")
-
-    def test_held_fist_fires_once_until_opened_again(self):
-        self.select()
-        self.gate.update("1", "fist", .4)
-        self.assertEqual(self.gate.update("1", "fist", .6), "4")
-        self.assertIsNone(self.gate.update("1", "fist", 5.0))
-        self.assertIsNone(self.gate.update("1", "closing", 6.0))
-        self.select("2", start=7.0)
-        self.gate.update("9", "fist", 7.4)
-        self.assertEqual(self.gate.update("9", "fist", 7.6), "2")
-
-    def test_fist_must_be_continuous(self):
-        self.select()
-        self.gate.update("4", "fist", .4)
-        self.gate.update("4", "closing", .5)
-        self.gate.update("4", "fist", .6)
-        self.assertIsNone(self.gate.update("4", "fist", .7))
-        self.assertEqual(self.gate.update("4", "fist", .8), "4")
-
-    def test_loss_forgets_selection_and_requires_open_hand(self):
-        self.select()
-        self.gate.lost()
-        self.assertIsNone(self.gate.update("4", "fist", 2.0))
-        self.assertIsNone(self.gate.update("4", "fist", 3.0))
-        self.assertIsNone(self.gate.selected)
-
-    def test_changing_key_before_stable_selection_does_not_commit_old_key(self):
-        self.select("4")
-        self.gate.update("5", "open", .4)
-        self.assertIsNone(self.gate.selected)
-        self.gate.update("5", "fist", .5)
-        self.assertIsNone(self.gate.update("5", "fist", 1.0))
-
+class PreviewTests(unittest.TestCase):
     def test_jamo_preview_follows_consonant_cycle_without_editing(self):
         ime = CheonjiinIME()
         self.assertEqual(ime.preview_label("4", 0.0), "ㄱ")
@@ -395,16 +376,14 @@ class FistTests(unittest.TestCase):
         self.assertEqual(ime.preview_label("4", 2.0), "ㄱ")
         self.assertEqual(ime.preview_label("2", .5), "ㆍ")
         self.assertEqual(ime.preview_label("BACK", .5), "지움")
+        self.assertEqual(ime.preview_label("COMMIT", .5), "확정")
 
-    def test_prepared_character_does_not_change_after_other_hand_edits(self):
+    def test_commit_key_separates_same_consonant(self):
         ime = CheonjiinIME()
         ime.press("4", 0.0)
-        prepared = ime.prepare_key("4", .3)
-        ime.press("SPACE", .4)
-        ime.press("4", 1.0, prepared=prepared)
-        self.assertEqual(ime.text, "ㄱ ㅋ")
-        ime.backspace()
-        self.assertEqual(ime.text, "ㄱ ")
+        ime.press("COMMIT", 0.1)
+        ime.press("4", 0.2)
+        self.assertEqual(ime.text, "ㄱㄱ")
 
 
 class PoseTests(unittest.TestCase):
@@ -412,12 +391,12 @@ class PoseTests(unittest.TestCase):
         for mirrored in (False, True):
             for width, height in ((640, 480), (1280, 720)):
                 with self.subTest(mirrored=mirrored, size=(width, height)):
-                    self.assertEqual(classify_hand_pose(HandKeyboardTests.hand(mirrored=mirrored), width, height), "open")
-                    self.assertEqual(classify_hand_pose(HandKeyboardTests.hand(mirrored=mirrored, fist=True), width, height), "fist")
+                    self.assertEqual(classify_hand_pose(detection(mirrored=mirrored)[0], width, height), "open")
+                    self.assertEqual(classify_hand_pose(detection(mirrored=mirrored, fist=True)[0], width, height), "fist")
 
     def test_partial_curl_is_not_a_fist(self):
-        opened = HandKeyboardTests.hand()
-        closed = HandKeyboardTests.hand(fist=True)
+        opened = detection()[0]
+        closed = detection(fist=True)[0]
         for base in (5, 9, 13):
             opened[base:base + 4] = closed[base:base + 4]
         self.assertEqual(classify_hand_pose(opened, 640, 480), "closing")
@@ -428,88 +407,25 @@ class PoseTests(unittest.TestCase):
 
 
 class GeometryTests(unittest.TestCase):
-    @staticmethod
-    def hand():
-        points = [SimpleNamespace(x=0.1, y=0.9) for _ in range(21)]
-        for base, x in ((5, 0.3), (9, 0.5), (13, 0.7), (17, 0.9)):
-            for offset in range(4):
-                points[base + offset] = SimpleNamespace(x=x, y=0.75 - offset * 0.15)
-        points[4] = SimpleNamespace(x=points[8].x, y=points[8].y)
-        return points
+    def test_keys_sit_on_segment_midpoints(self):
+        image, _ = detection()
+        points, targets = key_targets(image, WIDTH, HEIGHT)
+        self.assertEqual(len(points), 21 + 12)
+        self.assertEqual([key for key, _, _, _, _ in targets], [key for _, key, _ in KEY_MAP])
+        # I1(끝마디)은 DIP(7)와 TIP(8)의 중점이다.
+        _, _, index, _, _ = targets[0]
+        self.assertAlmostEqual(points[index][0], (points[7][0] + points[8][0]) / 2)
+        self.assertAlmostEqual(points[index][1], (points[7][1] + points[8][1]) / 2)
 
-    def test_thumb_at_top_left_vowel_is_key_one(self):
-        _, targets, key, released = contact_geometry(self.hand(), 640, 480, 0.16)
-        self.assertEqual(len(targets), 12)
-        self.assertEqual(key, "1")
-        self.assertFalse(released)
-
-    def test_uniform_image_scaling_keeps_same_key(self):
-        for scale in (0.5, 1, 2):
-            _, _, key, _ = contact_geometry(self.hand(), 640 * scale, 480 * scale, 0.16)
-            self.assertEqual(key, "1")
-
-    def test_all_twelve_targets(self):
-        for key, _, index in key_layout(self.hand()):
-            with self.subTest(key=key):
-                points = self.hand()
-                points[4] = SimpleNamespace(x=points[index].x, y=points[index].y)
-                _, _, found, _ = contact_geometry(points, 640, 480, 0.16)
-                self.assertEqual(found, key)
-
-    def test_vowels_are_top_row_for_both_hands(self):
-        for mirrored in (False, True):
-            with self.subTest(mirrored=mirrored):
-                points = self.hand()
-                if mirrored:
-                    points = [SimpleNamespace(x=1 - p.x, y=p.y) for p in points]
-                layout = key_layout(points)
-                vowels = layout[:3]
-                self.assertEqual([label for _, label, _ in vowels], ["ㅣ", "ㆍ", "ㅡ"])
-                self.assertEqual([index % 4 for _, _, index in vowels], [0, 0, 0])
-                xs = [points[index].x for _, _, index in vowels]
-                self.assertEqual(xs, sorted(xs))
-                self.assertLess(max(points[index].y for _, _, index in vowels),
-                                min(points[index].y for _, _, index in layout[3:]))
-
-    def test_standard_four_by_three_layout_and_contact_on_both_hands(self):
-        expected = (("1", "2", "3"), ("4", "5", "6"), ("7", "8", "9"), ("SPACE", "0", "BACK"))
-        for mirrored in (False, True):
-            points = self.hand()
-            if mirrored:
-                points = [SimpleNamespace(x=1 - p.x, y=p.y) for p in points]
-            layout = key_layout(points)
-            self.assertEqual(len({index for _, _, index in layout}), 12)
-            for row_index, row in enumerate(expected):
-                keys = layout[row_index * 3:row_index * 3 + 3]
-                self.assertEqual(tuple(key for key, _, _ in keys), row)
-                xs = [points[index].x for _, _, index in keys]
-                self.assertEqual(xs, sorted(xs))
-            for key, _, index in layout:
-                with self.subTest(mirrored=mirrored, key=key):
-                    points[4] = SimpleNamespace(x=points[index].x, y=points[index].y)
-                    _, _, found, _ = contact_geometry(points, 640, 480, .16)
-                    self.assertEqual(found, key)
-
-    def test_fingertip_radius_uses_same_finger_neighbor(self):
-        points = self.hand()
-        # 다른 손가락의 MCP가 손끝에 가까워져도 손끝 반경에는 영향을 주지 않는다.
-        points[9] = SimpleNamespace(x=points[8].x + .001, y=points[8].y)
-        _, targets, _, _ = contact_geometry(points, 640, 480, .16)
-        target = next(target for target in targets if target[2] == 8)
-        self.assertGreater(target[3], 10)
-
-    def test_far_thumb_releases(self):
-        points = self.hand()
-        points[4] = SimpleNamespace(x=0.0, y=0.0)
-        _, _, key, released = contact_geometry(points, 640, 480, 0.16)
-        self.assertIsNone(key)
-        self.assertTrue(released)
+    def test_nearest_target_follows_thumb(self):
+        for segment, key, _ in KEY_MAP:
+            with self.subTest(segment=segment):
+                _, targets = key_targets(detection(middle(segment))[0], WIDTH, HEIGHT)
+                self.assertEqual(min(targets, key=lambda target: target[4])[0], key)
 
     def test_tiny_hand_is_not_an_input(self):
-        _, targets, key, released = contact_geometry(self.hand(), 20, 20, 0.16)
+        _, targets = key_targets(detection()[0], 20, 20)
         self.assertEqual(targets, [])
-        self.assertIsNone(key)
-        self.assertFalse(released)
 
 
 if __name__ == "__main__":

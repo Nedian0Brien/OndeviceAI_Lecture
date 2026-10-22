@@ -128,7 +128,7 @@ class CheonjiinIME:
                     and 0 <= now - self.last_time <= self.cycle_seconds):
                 return group[(group.index(self.tokens[-1].value) + 1) % len(group)]
             return group[0]
-        return {"1": "ㅣ", "2": "ㆍ", "3": "ㅡ", "SPACE": "공백", "BACK": "지움"}.get(key, "")
+        return {"1": "ㅣ", "2": "ㆍ", "3": "ㅡ", "SPACE": "공백", "COMMIT": "확정", "BACK": "지움"}.get(key, "")
 
     def prepare_key(self, key, now):
         label = self.preview_label(key, now)
@@ -226,54 +226,33 @@ class TouchGate:
         return None
 
 
-class FistGate:
-    """편 손에서 키 선택 → 선택 고정 → 주먹 유지로 한 번 확정 → 손을 펴서 재준비."""
+class FistHold:
+    """주먹을 hold초 유지하면 한 번(지움). 손을 다시 펴야 다음 주먹을 센다.
 
-    def __init__(self, dwell=0.12, release=0.10, hold=0.18):
-        self.dwell, self.release, self.hold = dwell, release, hold
+    처음 보이는 손이나 유실 후 돌아온 손은 먼저 펴야 한다. 주먹을 쥔 채 시작해도 지우지 않는다.
+    """
+
+    def __init__(self, hold=0.18):
+        self.hold = hold
         self.lost()
 
     def lost(self):
         self.armed = False
-        self.selected = self.candidate = None
-        self.since = self.open_since = self.fist_since = None
+        self.since = None
         self.progress = 0.0
-        self.phase = "waiting"
 
-    def update(self, key, pose, now):
+    def update(self, pose, now):
         self.progress = 0.0
         if pose == "open":
-            self.fist_since = None
-            if not self.armed:
-                if self.open_since is None:
-                    self.open_since = now
-                if now - self.open_since >= self.release:
-                    self.armed = True
-                    self.selected = self.candidate = self.since = None
-                    self.phase = "selecting"
-                return None
-            self.phase = "selecting"
-            if key != self.candidate:
-                self.candidate, self.since = key, now
-                self.selected = None
-            if key is not None and now - self.since >= self.dwell:
-                self.selected = key
-            return None
-
-        # 접는 도중에는 엄지/마디가 움직여도 마지막 선택을 바꾸지 않는다.
-        self.open_since = None
-        self.candidate = self.since = None
-        if not self.armed:
-            return None
-        self.phase = "closing"
-        if pose != "fist" or self.selected is None:
-            self.fist_since = None
-            return None
-        if self.fist_since is None:
-            self.fist_since = now
-        self.progress = min(1.0, (now - self.fist_since) / self.hold)
+            self.armed, self.since = True, None
+            return False
+        if pose != "fist" or not self.armed:
+            self.since = None
+            return False
+        if self.since is None:
+            self.since = now
+        self.progress = min(1.0, (now - self.since) / self.hold)
         if self.progress >= 1.0:
-            self.armed = False
-            self.phase = "held"
-            return self.selected
-        return None
+            self.armed, self.since = False, None
+            return True
+        return False

@@ -1,4 +1,4 @@
-"""엄지로 자모를 선택하고 주먹으로 확정하는 천지인 키보드.
+"""엄지로 손가락 마디를 누르면 입력하고, 주먹을 쥐면 지우는 천지인 키보드.
 
 실행: python 261018/project01.py
 카메라 없이 조합 확인: python 261018/project01.py --demo
@@ -6,6 +6,7 @@
 
 import argparse
 from collections import Counter
+import json
 from dataclasses import dataclass, field
 from functools import lru_cache
 import math
@@ -13,20 +14,21 @@ from pathlib import Path
 import time
 from typing import Optional
 
-from cheonjiin import CheonjiinIME, FistGate
+from cheonjiin import CheonjiinIME, FistHold
 
 
 ROOT = Path(__file__).resolve().parents[1]
-# 표준 천지인: 세 손가락을 열로, 손끝 → DIP → PIP → MCP를 네 행으로 쓴다.
-# 아래 index는 검지가 화면 왼쪽일 때의 기본값. 실제 좌우 열은 key_layout에서 정한다.
-ROWS = (
-    ("손끝", (("1", "ㅣ", 8), ("2", "ㆍ", 12), ("3", "ㅡ", 16))),
-    ("끝쪽 관절", (("4", "ㄱㅋㄲ", 7), ("5", "ㄴㄹ", 11), ("6", "ㄷㅌㄸ", 15))),
-    ("가운데 관절", (("7", "ㅂㅍㅃ", 6), ("8", "ㅅㅎㅆ", 10), ("9", "ㅈㅊㅉ", 14))),
-    ("뿌리 관절", (("SPACE", "공백", 5), ("0", "ㅇㅁ", 9), ("BACK", "지움", 13))),
+# 엄지로 누르는 12개 마디(tap_detect.SEGMENTS: 검지 I·중지 M·약지 R·소지 P × 끝 1·중간 2·뿌리 3)와
+# 천지인 키. 검지~약지는 기존 배열(모음 / ㄱㄴㄷ / ㅂㅅㅈ)을 그대로 두고, 소지에 ㅇ·공백·확정을 둔다.
+# 지움은 주먹이다.
+KEY_MAP = (
+    ("I1", "1", "ㅣ"), ("M1", "2", "ㆍ"), ("R1", "3", "ㅡ"), ("P1", "0", "ㅇㅁ"),
+    ("I2", "4", "ㄱㅋㄲ"), ("M2", "5", "ㄴㄹ"), ("R2", "6", "ㄷㅌㄸ"), ("P2", "SPACE", "공백"),
+    ("I3", "7", "ㅂㅍㅃ"), ("M3", "8", "ㅅㅎㅆ"), ("R3", "9", "ㅈㅊㅉ"), ("P3", "COMMIT", "확정"),
 )
-KEYS = [key for _, row in ROWS for key in row]
-KEY_LABELS = {key: label for key, label, _ in KEYS}
+KEY_OF_SEGMENT = {segment: key for segment, key, _ in KEY_MAP}
+# 누르기 판정 기본값: world 좌표(m)에서 엄지 끝과 마디 선분 사이 거리. tap_detect.Seg 참고.
+TAP_ENTER, TAP_EXIT, TAP_DWELL = 0.012, 0.020, 0.05
 HAND_CONNECTIONS = tuple(
     (a, b)
     for chain in ((0, 1, 2, 3, 4), (0, 5, 6, 7, 8), (5, 9, 10, 11, 12),
@@ -42,36 +44,25 @@ GSTREAMER = (
 )
 
 
-def key_layout(landmarks):
-    """양손 모두 화면 왼쪽부터 ㅣㆍㅡ로 읽히게 검지/중지/약지 열을 정한다.
+def key_targets(landmarks, width, height):
+    """12개 마디의 중점에 키를 놓는다.
 
-    손가락 끝의 움직임에 열이 바뀌지 않도록 뿌리(MCP)의 좌우 위치를 사용한다.
+    points 뒤에 마디 중점 12개를 덧붙이고, 각 키는 (키, 라벨, points 번호, 마디 길이, 엄지 거리)다.
+    엄지 거리는 화면 강조용 2D 거리이며 입력 판정에는 쓰지 않는다.
     """
-    columns = sorted((5, 9, 13), key=lambda base: landmarks[base].x)
-    return [(key, label, columns[column] + 3 - row_index)
-            for row_index, (_, row) in enumerate(ROWS)
-            for column, (key, label, _) in enumerate(row)]
+    from tap_detect import SEGMENTS
 
-
-def contact_geometry(landmarks, width, height, ratio):
-    """실제 픽셀 비율로 거리를 재고 손바닥/인접 마디 크기로 접촉 반경을 제한한다."""
     points = [(p.x * width, p.y * height) for p in landmarks]
     palm_size = max(math.dist(points[5], points[17]), math.dist(points[0], points[9]))
     if palm_size < 35:  # 너무 작은 손은 판정하지 않는다.
-        return points, [], None, False
+        return points, []
     targets = []
-    for key, label, index in key_layout(landmarks):
-        # 같은 손가락의 이웃 마디와 겹치지 않도록 반경을 제한.
-        base = 5 + ((index - 5) // 4) * 4
-        neighbors = [other for other in (index - 1, index + 1) if base <= other <= base + 3]
-        spacing = min(math.dist(points[index], points[n]) for n in neighbors)
-        radius = min(palm_size * ratio, spacing * 0.46)
-        distance = math.dist(points[4], points[index])
-        targets.append((key, label, index, radius, distance))
-    closest = min(targets, key=lambda target: target[4])
-    candidate = closest[0] if closest[4] <= closest[3] else None
-    released = all(distance > radius * 1.45 for _, _, _, radius, distance in targets)
-    return points, targets, candidate, released
+    for segment, key, label in KEY_MAP:
+        a, b = SEGMENTS[segment]
+        points.append(((points[a][0] + points[b][0]) / 2, (points[a][1] + points[b][1]) / 2))
+        targets.append((key, label, len(points) - 1, math.dist(points[a], points[b]),
+                        math.dist(points[4], points[-1])))
+    return points, targets
 
 
 def classify_hand_pose(landmarks, width, height):
@@ -102,74 +93,91 @@ class HandView:
     label: str
     points: list
     targets: list
-    candidate: Optional[str]
     nearest: Optional[str]
-    gate: FistGate
+    pose: str = "open"
+    armed: bool = False  # 엄지가 손가락에서 떨어져 다음 누르기를 받을 수 있는 상태
+    fist_progress: float = 0.0
     last_press: tuple = (None, float("-inf"))
     focus: dict = field(default_factory=dict)
-    pose: str = "open"
-    confirmed_label: str = ""
-    pending_label: str = ""
+    distances: Optional[list] = None  # 엄지 끝 ~ 12개 마디 world 거리(m), KEY_MAP 순서. 진단 표시·기록용
 
 
 class HandKeyboardTracker:
-    """왼손·오른손의 선택/주먹 확정 상태를 각각 유지한다."""
+    """왼손·오른손마다 누르기 검출기와 주먹(지움) 상태를 따로 유지한다."""
 
-    def __init__(self, mode="both", dwell=0.12, release=0.10, fist_hold=0.18):
+    def __init__(self, mode="both", tap_enter=TAP_ENTER, tap_exit=TAP_EXIT, tap_dwell=TAP_DWELL, fist_hold=0.18):
+        from tap_detect import Seg
+
         self.mode = "both" if mode == "auto" else mode
-        self.gates = {label: FistGate(dwell, release, fist_hold) for label in ("Left", "Right")}
-        self.last_press = {label: (None, float("-inf")) for label in self.gates}
-        self.confirmed_labels = {label: "" for label in self.gates}
-        self.pending = {label: None for label in self.gates}
-        self.focus = {label: {} for label in self.gates}
+        self.taps = {label: Seg("world", tap_enter, tap_exit, tap_dwell) for label in ("Left", "Right")}
+        self.fists = {label: FistHold(fist_hold) for label in self.taps}
+        self.last_press = {label: (None, float("-inf")) for label in self.taps}
+        self.focus = {label: {} for label in self.taps}
         self.last_time = None
 
-    def reset(self):
-        for label, gate in self.gates.items():
-            gate.lost()
-            self.pending[label] = None
+    def set_tap(self, enter, exit):
+        for tap in self.taps.values():
+            tap.enter, tap.exit = enter, exit
+        self.reset()
 
-    def update(self, detections, width, height, ratio, now, enabled=True, ime=None):
-        detections = sorted(((label, landmarks) for label, landmarks in detections
-                             if label in self.gates and (self.mode == "both" or label.lower() == self.mode)),
+    def set_fist_hold(self, hold):
+        for fist in self.fists.values():
+            fist.hold = hold
+        self.reset()
+
+    def reset(self):
+        for label in self.taps:
+            self.lost(label)
+
+    def lost(self, label):
+        self.taps[label].reset()
+        self.fists[label].lost()
+
+    def update(self, detections, width, height, now, enabled=True):
+        """detections: (좌우 라벨, 이미지 landmark, world landmark). 이벤트는 (라벨, 키), 지움은 BACK."""
+        from tap_detect import HandFrame, as_points
+
+        detections = sorted(((label, landmarks, world) for label, landmarks, world in detections
+                             if label in self.taps and (self.mode == "both" or label.lower() == self.mode)),
                             key=lambda detection: detection[0])
-        counts = Counter(label for label, _ in detections)
-        for label, gate in self.gates.items():
+        counts = Counter(label for label, _, _ in detections)
+        for label in self.taps:
             if counts[label] != 1:
-                gate.lost()
+                self.lost(label)
                 self.focus[label] = {}
-                self.pending[label] = None
         # 80ms의 짧은 보간으로 가까운 키의 확대가 프레임마다 튀지 않게 한다.
         blend = 1.0 if self.last_time is None else 1 - math.exp(-max(0, now - self.last_time) / 0.08)
         self.last_time = now
         views, events = [], []
-        for label, landmarks in detections:
-            points, targets, candidate, _ = contact_geometry(landmarks, width, height, ratio)
-            gate = self.gates[label]
+        for label, landmarks, world in detections:
+            distances = None
+            points, targets = key_targets(landmarks, width, height)
             pose = classify_hand_pose(landmarks, width, height)
             nearest = min(targets, key=lambda target: target[4])[0] if targets else None
             if not enabled or not targets or counts[label] != 1:
-                gate.lost()
-                self.pending[label] = None
+                self.lost(label)
+            elif pose == "fist":
+                # 주먹을 쥐는 동안 엄지가 마디에 닿아도 입력하지 않고, 손을 펴서 엄지를 떼야 다시 입력한다.
+                self.taps[label].reset()
+                if self.fists[label].update(pose, now):
+                    events.append((label, "BACK"))
+                    self.last_press[label] = ("BACK", now)
             else:
-                if pose == "open":
-                    self.pending[label] = None
-                elif gate.armed and gate.selected is not None and self.pending[label] is None and ime is not None:
-                    # 주먹을 접기 시작할 때 표시한 자모를 보존한다. 확정 중 순환 시간이
-                    # 지나거나 다른 손이 입력해도 이 손에서 고른 글자가 바뀌지 않는다.
-                    self.pending[label] = ime.prepare_key(gate.selected, now)
-                pressed = gate.update(nearest, pose, now)
-                if pressed:
-                    self.last_press[label] = (pressed, now)
-                    events.append((label, pressed))
-            focus_key = nearest if pose == "open" else gate.selected
+                self.fists[label].update(pose, now)
+                tap = self.taps[label]
+                distances = tap.features(HandFrame(as_points(landmarks), as_points(world), width, height))
+                segment = tap.step(now, distances)
+                if segment is not None:
+                    key = KEY_OF_SEGMENT[segment]
+                    events.append((label, key))
+                    self.last_press[label] = (key, now)
             self.focus[label] = {
-                key: self.focus[label].get(key, 0.0) + blend * ((1.0 if key == focus_key else 0.0) - self.focus[label].get(key, 0.0))
+                key: self.focus[label].get(key, 0.0) + blend * ((1.0 if key == nearest else 0.0) - self.focus[label].get(key, 0.0))
                 for key, _, _, _, _ in targets
             }
-            views.append(HandView(label, points, targets, candidate, nearest, gate,
-                                  self.last_press[label], self.focus[label], pose, self.confirmed_labels[label],
-                                  self.pending[label].label if self.pending[label] is not None else ""))
+            views.append(HandView(label, points, targets, nearest, pose, self.taps[label].armed,
+                                  self.fists[label].progress, self.last_press[label], self.focus[label],
+                                  None if distances is None else [float(d) for d in distances]))
         return views, events
 
 
@@ -270,8 +278,8 @@ def hud_text_sprite(text, font, fill, anchor, stroke_width, stroke_fill):
     return sprite, left, top
 
 
-def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False, show_mask=False,
-            show_help=False, notice_since=None, fist_hold=0.18):
+def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_mask=False,
+            show_help=False, notice_since=None, fist_hold=0.18, tap_enter=TAP_ENTER):
     """영상 위 작은 원형 유리 키와 한 줄 입력 캡슐을 합성한다."""
     import cv2
     import numpy as np
@@ -314,7 +322,7 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
             draw.rounded_rectangle(bounds, radius=radius, fill=fill, outline=edge, width=stroke)
 
     # 한 줄만 보이는 입력 캡슐. 전체 텍스트는 조합기에 유지하고 저장한다.
-    text = ime.text.split("\n")[-1] if ime.text else "엄지로 선택 · 주먹으로 입력"
+    text = ime.text.split("\n")[-1] if ime.text else "마디를 눌러 입력 · 주먹은 지움"
     input_font = large if ime.text else normal
     available = min(w - 2 * margin, 460 * scale) - 36 * scale
     if hud_text_width(text, input_font) > available:
@@ -354,7 +362,7 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
 
     for hand in hands:
         points = hand.points
-        if hand.pose != "open":
+        if hand.pose == "fist":
             continue
         # 확대된 키가 이웃 키에 가려지지 않도록 마지막에 그린다.
         for key, label, index, _, _ in sorted(hand.targets, key=lambda target: hand.focus.get(target[0], 0.0)):
@@ -376,9 +384,10 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
             ink = (28, 29, 34, 255) if recent else (muted if paused else white)
             write((cx, cy), display, anchor="mm", font=key_font, fill=ink)
 
-    # 선택한 자모를 손바닥 한가운데 표시한다. 주먹 확정 후에는 실제 입력 글자를 유지한다.
+    # 손바닥 한가운데: 엄지와 가장 가까운 키를 누르면 들어갈 자모, 주먹을 쥐는 중이면 지움 진행.
     for hand in hands:
-        key = hand.gate.selected or (hand.gate.candidate if hand.pose == "open" else None)
+        deleting = hand.fist_progress > 0 or hand.pose == "fist"
+        key = "BACK" if deleting else hand.nearest
         if key is None or not hand.targets:
             continue
         points = hand.points
@@ -388,20 +397,24 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
         cx = min(max(cx, diameter / 2 + 3), w - diameter / 2 - 3)
         cy = min(max(cy, diameter / 2 + 3), h - diameter / 2 - 3)
         recent = 0 <= now - hand.last_press[1] < 0.28
-        confirmed = hand.gate.phase == "held" and hand.confirmed_label
-        glyph = hand.confirmed_label if confirmed else (hand.pending_label or ime.preview_label(key, now))
+        glyph = ime.preview_label(key, now)
         bounds = (cx - diameter / 2, cy - diameter / 2, cx + diameter / 2, cy + diameter / 2)
-        glass(bounds, circle=True, hover=hand.gate.selected is not None, pressed=recent)
+        glass(bounds, circle=True, hover=hand.armed or deleting, pressed=recent)
         font = hud_font(fonts[2], max(10, round(diameter * (0.42 if len(glyph) == 1 else 0.29))))
-        ink = (28, 29, 34, 255) if recent else (white if hand.gate.selected else muted)
+        ink = (28, 29, 34, 255) if recent else (white if hand.armed or deleting else muted)
         write((cx, cy), glyph, anchor="mm", font=font, fill=ink)
-        if hand.gate.progress > 0 and not paused and not show_help:
+        if hand.fist_progress > 0 and not paused and not show_help:
             r = diameter / 2 + 3 * scale
-            draw.arc((cx - r, cy - r, cx + r, cy + r), -90, -90 + 360 * hand.gate.progress,
+            draw.arc((cx - r, cy - r, cx + r, cy + r), -90, -90 + 360 * hand.fist_progress,
                      fill=white, width=max(2, round(2 * scale)))
 
     for hand in hands:
         x, y = hand.points[4]
+        if hand.distances is not None:
+            # 진단: 엄지와 가장 가까운 마디까지의 world 거리. 판정 거리 안이면 흰색, 밖이면 회색.
+            gap = min(hand.distances)
+            write((x + 11 * scale, y - 6 * scale), f"{gap * 1000:.0f}mm", font=small,
+                  fill=white if gap <= tap_enter else muted, stroke_width=stroke, stroke_fill=(28, 29, 34, 200))
         r = 7 * scale
         draw.ellipse((x - r - scale, y - r - scale, x + r + scale, y + r + scale),
                      outline=(20, 23, 29, 190), width=max(2, round(3 * scale)))
@@ -415,11 +428,9 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
         message = "일시정지 · P로 재개"
     elif not any(hand.targets for hand in hands):
         message = "손을 더 가까이" if hands else "손바닥을 보여주세요"
-    elif not any(hand.gate.armed for hand in hands if hand.targets):
-        message = "손을 펴세요"
-    elif any(hand.gate.selected for hand in hands):
-        message = "주먹을 쥐면 입력"
-    if notice_since is not None and now - notice_since < 2.5 and status.startswith("저장"):
+    elif not any(hand.armed for hand in hands if hand.targets):
+        message = "엄지를 손가락에서 떼세요"
+    if notice_since is not None and now - notice_since < 2.5 and status.startswith(("저장", "누르기 판정")):
         message = status
     if message and not show_help:
         message_width = min(w - 2 * margin, hud_text_width(message, small) + 28 * scale)
@@ -438,13 +449,13 @@ def draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused, enhanced=False
                                outline=(255, 255, 255, 65), width=stroke)
         help_lines = (
             "손마디 천지인",
-            "엄지로 선택 → 손바닥 글자 확인 → 주먹으로 입력",
+            "엄지로 마디를 누르면 입력 · 주먹을 쥐면 지움",
             "같은 자음 키를 빠르게 반복하면 다음 자음으로 바뀝니다.",
             "1~9 / 0 자판 테스트    - 공백    = 지움",
             "Tab 확정    Enter 줄바꿈    P 일시정지",
-            "E 보정    M 피부색 영역    [ ] 주먹 유지 시간",
+            "E 보정    M 피부색 영역    [ ] 누르기 판정 거리",
             "S 저장    Q / Esc 종료    H 도움말 닫기",
-            f"주먹 {fist_hold:.2f}초 · 보정 {'ON' if enhanced else 'OFF'} · 영역 {'ON' if show_mask else 'OFF'} · {fps:.0f} FPS",
+            f"누르기 {tap_enter * 1000:.0f}mm · 주먹 {fist_hold:.2f}초 · 보정 {'ON' if enhanced else 'OFF'} · {fps:.0f} FPS",
             " / ".join("오른손" if hand.label == "Right" else "왼손" for hand in hands) + f" · 전체 입력 {len(ime.text)}자",
         )
         for i, text in enumerate(help_lines):
@@ -469,30 +480,85 @@ def is_window_closed(cv2, name):
     return visible == 0
 
 
-def run(args):
-    try:
-        import cv2
-        import mediapipe as mp
-        from mediapipe.tasks import python
-        from mediapipe.tasks.python import vision
-        from PIL import ImageFont
-    except ImportError as exc:
-        raise RuntimeError("필요 패키지를 확인하세요: mediapipe, numpy, Pillow, OpenCV. " + str(exc)) from exc
+def open_capture(cv2, args):
+    """--pipeline이 있으면 GStreamer, 없으면 카메라 번호로 640x480 캡처를 연다."""
+    capture = (cv2.VideoCapture(args.pipeline, cv2.CAP_GSTREAMER) if args.pipeline
+               else cv2.VideoCapture(args.camera))
+    if not capture.isOpened():
+        raise RuntimeError("카메라를 열 수 없습니다. --camera 또는 --pipeline 값을 확인하세요.")
+    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    return capture
 
-    if not args.model.is_file():
-        raise FileNotFoundError("MediaPipe 모델이 없습니다: " + str(args.model))
-    font_path = find_font(args.font)
-    fonts = tuple(ImageFont.truetype(str(font_path), size) for size in (16, 21, 29))
+
+def read_frame(cv2, capture, wait=10.0):
+    """프레임과 끊겼던 시간(초)을 돌려준다.
+
+    iPhone Continuity Camera는 기기를 움직이거나 잠금을 풀면 잠시 멈춘다. wait초까지 기다린다.
+    """
+    ok, frame = capture.read()
+    if ok:
+        return frame, 0.0
+    since = time.monotonic()
+    print("카메라 프레임이 끊겼습니다. 다시 들어오기를 기다립니다.", flush=True)
+    while time.monotonic() - since <= wait:
+        cv2.waitKey(50)
+        ok, frame = capture.read()
+        if ok:
+            gap = time.monotonic() - since
+            print(f"카메라 프레임이 다시 들어옵니다 ({gap:.1f}초 끊김).", flush=True)
+            return frame, gap
+    raise RuntimeError(f"카메라 프레임을 {wait:.0f}초 동안 읽지 못했습니다. 연결/파이프라인을 확인하세요.")
+
+
+def create_detector(model):
+    """VIDEO 모드 HandLandmarker. with 문으로 닫는다."""
+    from mediapipe.tasks import python
+    from mediapipe.tasks.python import vision
+
+    if not model.is_file():
+        raise FileNotFoundError("MediaPipe 모델이 없습니다: " + str(model))
     options = vision.HandLandmarkerOptions(
-        base_options=python.BaseOptions(model_asset_path=str(args.model)),
+        base_options=python.BaseOptions(model_asset_path=str(model)),
         running_mode=vision.RunningMode.VIDEO, num_hands=2,
         min_hand_detection_confidence=0.6, min_hand_presence_confidence=0.6,
         min_tracking_confidence=0.6,
     )
+    return vision.HandLandmarker.create_from_options(options)
+
+
+def detect_hands(cv2, mp, detector, frame, timestamp, mirrored):
+    """BGR 프레임의 손을 (좌우 라벨, 이미지 landmark, world landmark, 좌우 점수) 목록으로 돌려준다."""
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    result = detector.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), timestamp)
+    detections = []
+    for landmarks, world, handedness in zip(result.hand_landmarks, result.hand_world_landmarks, result.handedness):
+        category = handedness[0]
+        label = category.category_name
+        # MediaPipe handedness는 selfie(좌우 반전) 영상을 기준으로 한다.
+        if not mirrored:
+            label = "Left" if label == "Right" else "Right"
+        # handedness 점수는 좌/우 분류 확신도이며 손 검출 확신도가 아니다.
+        # 검출된 오른손을 추가 점수 임계값으로 누락시키지 않는다.
+        detections.append((label, landmarks, world, category.score))
+    return detections
+
+
+def run(args):
+    try:
+        import cv2
+        import mediapipe as mp
+        from PIL import ImageFont
+    except ImportError as exc:
+        raise RuntimeError("필요 패키지를 확인하세요: mediapipe, numpy, Pillow, OpenCV. " + str(exc)) from exc
+
+    font_path = find_font(args.font)
+    fonts = tuple(ImageFont.truetype(str(font_path), size) for size in (16, 21, 29))
     capture = None
+    log = args.log.open("w", encoding="utf-8") if args.log else None
     ime = CheonjiinIME(args.cycle)
-    keyboards = HandKeyboardTracker(args.hand, args.dwell, args.release, args.fist_hold)
-    ratio = args.touch_ratio
+    tap_enter, tap_gap = args.tap_enter / 1000, (args.tap_exit - args.tap_enter) / 1000
+    keyboards = HandKeyboardTracker(args.hand, tap_enter, tap_enter + tap_gap, args.tap_dwell, args.fist_hold)
     fist_hold = args.fist_hold
     enhanced = args.enhance
     show_mask = args.show_mask
@@ -500,25 +566,20 @@ def run(args):
     paused = False
     show_help = False
     notice_since = None
-    status = "엄지로 고른 뒤 주먹을 쥐어 입력하세요"
+    status = "마디를 눌러 입력하세요"
     timestamp = -1
     previous_frame = time.monotonic()
     fps = 0.0
     exit_reason = None
     try:
-        with vision.HandLandmarker.create_from_options(options) as detector:
-            capture = (cv2.VideoCapture(args.pipeline, cv2.CAP_GSTREAMER) if args.pipeline
-                       else cv2.VideoCapture(args.camera))
-            if not capture.isOpened():
-                raise RuntimeError("카메라를 열 수 없습니다. --camera 또는 --pipeline 값을 확인하세요.")
-            capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        with create_detector(args.model) as detector:
+            capture = open_capture(cv2, args)
             cv2.namedWindow("Hand Cheonjiin", cv2.WINDOW_NORMAL)
             cv2.resizeWindow("Hand Cheonjiin", 960, 720)
             while True:
-                ok, frame = capture.read()
-                if not ok:
-                    raise RuntimeError("카메라 프레임을 읽지 못했습니다. 연결/파이프라인을 확인하세요.")
+                frame, gap = read_frame(cv2, capture)
+                if gap:
+                    keyboards.reset()  # 끊긴 동안의 엄지 위치로 입력하지 않는다.
                 now = time.monotonic()
                 delta = now - previous_frame
                 previous_frame = now
@@ -530,36 +591,28 @@ def run(args):
                 if enhanced:
                     frame = enhance_frame(frame, clahe)
                 h, w = frame.shape[:2]
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 timestamp = max(timestamp + 1, int(now * 1000))
-                result = detector.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), timestamp)
-                detections = []
-                for landmarks, handedness in zip(result.hand_landmarks, result.handedness):
-                    category = handedness[0]
-                    label = category.category_name
-                    # MediaPipe handedness는 selfie(좌우 반전) 영상을 기준으로 한다.
-                    if args.no_mirror:
-                        label = "Left" if label == "Right" else "Right"
-                    # handedness 점수는 좌/우 분류 확신도이며 손 검출 확신도가 아니다.
-                    # 검출된 오른손을 추가 점수 임계값으로 누락시키지 않는다.
-                    detections.append((label, landmarks))
-                hands, events = keyboards.update(detections, w, h, ratio, now,
-                                                enabled=not paused and not show_help, ime=ime)
-                for label, pressed in events:
-                    prepared = keyboards.pending[label]
-                    glyph = prepared.label if prepared is not None else ime.preview_label(pressed, now)
-                    ime.press(pressed, now, prepared=prepared)
-                    keyboards.confirmed_labels[label] = glyph
+                detections = [(label, landmarks, world) for label, landmarks, world, _ in
+                              detect_hands(cv2, mp, detector, frame, timestamp, not args.no_mirror)]
+                hands, events = keyboards.update(detections, w, h, now, enabled=not paused and not show_help)
+                if log is not None:
                     for hand in hands:
-                        if hand.label == label:
-                            hand.confirmed_label = glyph
+                        log.write(json.dumps({
+                            "t": round(now, 4), "hand": hand.label, "pose": hand.pose, "armed": hand.armed,
+                            "nearest": hand.nearest, "enter": keyboards.taps[hand.label].enter,
+                            "mm": None if hand.distances is None else [round(d * 1000, 1) for d in hand.distances],
+                            "events": [key for label, key in events if label == hand.label],
+                        }, ensure_ascii=False) + "\n")
+                for label, pressed in events:
+                    glyph = ime.preview_label(pressed, now)
+                    ime.press(pressed, now)
                     status = ("오른손" if label == "Right" else "왼손") + " 입력: " + glyph
                 if show_mask:
                     for hand in hands:
                         if hand.targets:
                             frame = skin_overlay(frame, hand.points)
-                view = draw_ui(frame, ime, hands, status, ratio, fonts, fps, paused,
-                               enhanced, show_mask, show_help, notice_since, fist_hold)
+                view = draw_ui(frame, ime, hands, status, fonts, fps, paused,
+                               enhanced, show_mask, show_help, notice_since, fist_hold, keyboards.taps["Left"].enter)
                 cv2.imshow("Hand Cheonjiin", view)
                 key_code = cv2.waitKey(1) & 0xFF
                 if key_code in (27, ord("q"), ord("Q")):
@@ -600,19 +653,18 @@ def run(args):
                         status = "저장 실패 (터미널 확인)"
                         print("저장 실패:", exc)
                     notice_since = now
-                elif char == "[":
-                    fist_hold = max(0.08, round(fist_hold - 0.02, 2))
-                    for gate in keyboards.gates.values():
-                        gate.hold = fist_hold
-                    keyboards.reset()
-                elif char == "]":
-                    fist_hold = min(1.0, round(fist_hold + 0.02, 2))
-                    for gate in keyboards.gates.values():
-                        gate.hold = fist_hold
-                    keyboards.reset()
+                elif char in "[]":
+                    # 누르기 판정 거리 1mm 단위 조절. 잘 안 눌리면 ], 닿지 않았는데 입력되면 [.
+                    tap_enter = min(0.04, max(0.004, round(tap_enter + (0.001 if char == "]" else -0.001), 3)))
+                    keyboards.set_tap(tap_enter, round(tap_enter + tap_gap, 3))
+                    status = f"누르기 판정 거리 {tap_enter * 1000:.0f}mm"
+                    notice_since = now
     finally:
         if capture is not None:
             capture.release()
+        if log is not None:
+            log.close()
+            print("진단 기록: " + str(args.log))
         cv2.destroyAllWindows()
         if exit_reason:
             print("종료 이유: " + exit_reason)
@@ -638,16 +690,19 @@ def main():
     parser.add_argument("--flip-vertical", action="store_true", help="거꾸로 설치된 카메라 상하 반전")
     parser.add_argument("--enhance", action="store_true", help="LAB/CLAHE 명도 보정과 Gaussian 필터 사용")
     parser.add_argument("--show-mask", action="store_true", help="손 주변 피부색 분할 영역과 윤곽선 표시")
-    parser.add_argument("--touch-ratio", type=positive_float, default=0.16, help="기하 진단용 접촉 반경 (주먹 입력에는 영향 없음)")
-    parser.add_argument("--dwell", type=positive_float, default=0.12, help="가까운 키를 선택하는 유지 시간 (초)")
-    parser.add_argument("--release", type=positive_float, default=0.10, help="재입력 전 손을 펴는 유지 시간 (초)")
-    parser.add_argument("--fist-hold", type=positive_float, default=0.18, help="입력 확정에 필요한 주먹 유지 시간 (초)")
+    parser.add_argument("--tap-enter", type=positive_float, default=TAP_ENTER * 1000,
+                        help="엄지 끝과 마디 사이가 이 거리(mm, MediaPipe world 좌표) 안이면 누른 것으로 본다")
+    parser.add_argument("--tap-exit", type=positive_float, default=TAP_EXIT * 1000,
+                        help="엄지가 이 거리(mm) 밖으로 떨어져야 다음 누르기를 받는다")
+    parser.add_argument("--tap-dwell", type=positive_float, default=TAP_DWELL, help="누른 상태 유지 시간 (초)")
+    parser.add_argument("--fist-hold", type=positive_float, default=0.18, help="지움에 필요한 주먹 유지 시간 (초)")
     parser.add_argument("--cycle", type=positive_float, default=0.85, help="같은 자음 키를 순환하는 시간 (초)")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().with_name("project01_output.txt"))
+    parser.add_argument("--log", type=Path, help="프레임별 엄지-마디 거리와 입력 이벤트를 JSON Lines로 기록")
     parser.add_argument("--demo", action="store_true", help="카메라/외부 패키지 없이 '안녕하세요' 조합 시연")
     args = parser.parse_args()
-    if not 0.05 <= args.touch_ratio <= 0.35:
-        parser.error("--touch-ratio는 0.05~0.35 범위로 지정하세요.")
+    if args.tap_exit < args.tap_enter:
+        parser.error("--tap-exit는 --tap-enter 이상이어야 합니다.")
     if args.demo:
         ime = CheonjiinIME()
         now = 0.0

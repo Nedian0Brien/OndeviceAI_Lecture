@@ -183,6 +183,15 @@ class CheonjiinIME:
         self.tokens = []
         self.last_key, self.last_time = None, float("-inf")
 
+    def put_symbol(self, value, replace=False):
+        """문장부호·줄바꿈을 넣는다. replace면 마지막 기호를 바꾼다(꼬집기 순환). 지움 한 번에 한 단계 되돌린다."""
+        self._remember()
+        if replace and self.tokens and self.tokens[-1].kind == "B":
+            self.tokens[-1].value = value
+        else:
+            self.tokens.append(Token("B", value))
+        self.last_key, self.last_time = None, float("-inf")
+
 
 class TouchGate:
     """눌림 유지 → 한 번 입력 → 충분히 뗀 뒤 재입력. 손 유실은 release로 보지 않는다."""

@@ -100,6 +100,7 @@ class HandView:
     last_press: tuple = (None, float("-inf"))
     focus: dict = field(default_factory=dict)
     distances: Optional[list] = None  # 엄지 끝 ~ 12개 마디 world 거리(m), KEY_MAP 순서. 진단 표시·기록용
+    thumb: bool = True  # 엄지 끝 표시를 그릴지. 꼬집기 입력기의 선택 손은 커서로 대신 그린다.
 
 
 class HandKeyboardTracker:
@@ -279,8 +280,13 @@ def hud_text_sprite(text, font, fill, anchor, stroke_width, stroke_fill):
 
 
 def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_mask=False,
-            show_help=False, notice_since=None, fist_hold=0.18, tap_enter=TAP_ENTER):
-    """영상 위 작은 원형 유리 키와 한 줄 입력 캡슐을 합성한다."""
+            show_help=False, notice_since=None, fist_hold=0.18, tap_enter=TAP_ENTER,
+            hint=None, help_lines=None, cursors=()):
+    """영상 위 작은 원형 유리 키와 한 줄 입력 캡슐을 합성한다.
+
+    hint: 입력이 비었을 때 입력창 문구. help_lines: H 도움말 내용.
+    cursors: (x, y, 진행 0~1, 보조 문구) 목록. 꼬집기 입력기의 커서와 오므린 정도를 그린다.
+    """
     import cv2
     import numpy as np
     from PIL import Image, ImageDraw, ImageFilter
@@ -322,7 +328,7 @@ def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_
             draw.rounded_rectangle(bounds, radius=radius, fill=fill, outline=edge, width=stroke)
 
     # 한 줄만 보이는 입력 캡슐. 전체 텍스트는 조합기에 유지하고 저장한다.
-    text = ime.text.split("\n")[-1] if ime.text else "마디를 눌러 입력 · 주먹은 지움"
+    text = ime.text.split("\n")[-1] if ime.text else (hint or "마디를 눌러 입력 · 주먹은 지움")
     input_font = large if ime.text else normal
     available = min(w - 2 * margin, 460 * scale) - 36 * scale
     if hud_text_width(text, input_font) > available:
@@ -409,6 +415,8 @@ def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_
                      fill=white, width=max(2, round(2 * scale)))
 
     for hand in hands:
+        if not hand.thumb:
+            continue
         x, y = hand.points[4]
         if hand.distances is not None:
             # 진단: 엄지와 가장 가까운 마디까지의 world 거리. 판정 거리 안이면 흰색, 밖이면 회색.
@@ -421,6 +429,19 @@ def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_
         draw.ellipse((x - r, y - r, x + r, y + r), outline=white, width=max(1, round(2 * scale)))
         r = 2 * scale
         draw.ellipse((x - r, y - r, x + r, y + r), fill=white)
+
+    for x, y, progress, caption in cursors:
+        r = 9 * scale
+        draw.ellipse((x - r - scale, y - r - scale, x + r + scale, y + r + scale),
+                     outline=(20, 23, 29, 190), width=max(2, round(3 * scale)))
+        draw.ellipse((x - r, y - r, x + r, y + r), outline=white, width=max(1, round(2 * scale)))
+        if progress > 0:
+            r = 13 * scale
+            draw.arc((x - r, y - r, x + r, y + r), -90, -90 + 360 * progress, fill=white,
+                     width=max(2, round(2 * scale)))
+        if caption:
+            write((x + 16 * scale, y - 6 * scale), caption, font=small, fill=muted,
+                  stroke_width=stroke, stroke_fill=(28, 29, 34, 200))
 
     # 상태가 달라질 때만 작은 안내. 정상 입력 준비 상태에서는 안내창도 숨긴다.
     message = ""
@@ -447,7 +468,7 @@ def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_
         # 명시적으로 연 도움말에서만 단축키와 진단 정보를 보여준다.
         draw.rounded_rectangle(box, radius=24 * scale, fill=(38, 40, 47, 235),
                                outline=(255, 255, 255, 65), width=stroke)
-        help_lines = (
+        help_lines = help_lines or (
             "손마디 천지인",
             "엄지로 마디를 누르면 입력 · 주먹을 쥐면 지움",
             "같은 자음 키를 빠르게 반복하면 다음 자음으로 바뀝니다.",

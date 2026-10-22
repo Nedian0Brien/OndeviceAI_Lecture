@@ -13,6 +13,7 @@ import math
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import time
 
 from cheonjiin import CONSONANTS
@@ -21,6 +22,47 @@ from pinch_typer import (DISTAL, LEFT_KEYS, PINCH_ENTER, PINCH_EXIT, RIGHT_KEYS,
 
 
 WINDOW = "Pinch Cheonjiin"
+# 시연 장비(Jetson USB 카메라, GStreamer 640x480 30fps)가 기준이다. macOS에서 iPhone으로 시험할 때만 기본값을 올린다.
+AUTO_RESOLUTION = {"darwin": (1280, 720)}
+DEFAULT_RESOLUTION = (640, 480)
+
+
+def parse_resolution(value):
+    """--resolution 값: 'auto' 또는 '1280x720' 꼴."""
+    if value == "auto":
+        return value
+    try:
+        width, height = (int(part) for part in value.lower().split("x"))
+    except ValueError:
+        raise argparse.ArgumentTypeError("auto 또는 1280x720 꼴로 지정하세요.") from None
+    if width < 160 or height < 120:
+        raise argparse.ArgumentTypeError("너무 작은 해상도입니다.")
+    return width, height
+
+
+def capture_size(resolution, platform=None):
+    """카메라 번호로 열 때 요청할 해상도. auto는 macOS 1280x720, 그 밖(Jetson 등) 640x480."""
+    if resolution != "auto":
+        return resolution
+    return AUTO_RESOLUTION.get(platform or sys.platform, DEFAULT_RESOLUTION)
+
+
+def detection_frame(cv2, frame, max_width):
+    """손 검출용 영상. 가로가 max_width보다 크면 비율을 유지해 줄인다.
+
+    landmark는 0~1 비율 좌표라 원본 해상도 화면에 그대로 쓴다. 검출 입력을 640 이하로 두면 화면 해상도와
+    상관없이 검출 시간이 Jetson 640x480 시연과 같은 조건이 된다.
+    """
+    h, w = frame.shape[:2]
+    if w <= max_width:
+        return frame
+    return cv2.resize(frame, (max_width, max(1, round(h * max_width / w))), interpolation=cv2.INTER_AREA)
+
+
+def window_size(w, h, min_width=960, max_width=1440, max_height=900):
+    """처음 여는 창 크기. 640x480은 960x720으로 키우고, 큰 영상은 화면에 들어오게 줄인다."""
+    scale = min(max(min_width / w, 1.0), max_width / w, max_height / h)
+    return round(w * scale), round(h * scale)
 FIXTURES = Path(__file__).resolve().with_name("fixtures") / "pinch-typer-keys.json"
 BUTTONS = (("save", "저장"), ("pause", "일시정지"), ("help", "도움말"))
 MENU = (("copy", "복사"), ("clear", "전체 지우기"), ("close", "닫기"))
@@ -120,8 +162,8 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
     """hands: {"Left"|"Right": 픽셀 좌표 21개}. ui: 화면 상태(dict)."""
     import cv2
     import numpy as np
-    from PIL import Image, ImageDraw, ImageFilter
-    from project01 import HAND_CONNECTIONS, hud_font, hud_text_sprite, hud_text_width
+    from PIL import Image, ImageDraw
+    from project01 import HAND_CONNECTIONS, blur_under, hud_font, hud_text_sprite, hud_text_width, rounded_rectangle
 
     h, w = frame.shape[:2]
     s = ui_scale(w, h)
@@ -153,9 +195,9 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
             material_draw.ellipse(bounds, fill=205)
             draw.ellipse(bounds, fill=fill, outline=edge, width=stroke)
         else:
-            draw.rounded_rectangle((x1, y1 + 2 * s, x2, y2 + 2 * s), radius=radius, fill=(0, 0, 0, 25))
-            material_draw.rounded_rectangle(bounds, radius=radius, fill=205)
-            draw.rounded_rectangle(bounds, radius=radius, fill=fill, outline=edge, width=stroke)
+            rounded_rectangle(draw, (x1, y1 + 2 * s, x2, y2 + 2 * s), radius, fill=(0, 0, 0, 25))
+            rounded_rectangle(material_draw, bounds, radius, fill=205)
+            rounded_rectangle(draw, bounds, radius, fill=fill, outline=edge, width=stroke)
 
     # 손: 얇은 mesh, 손별 방향, 가장 가까운 손끝의 꼬집기 진행, 주먹 진행
     for label, points in hands.items():
@@ -318,13 +360,12 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         draw.rectangle((0, 0, w, h), fill=(16, 17, 21, 165))
         bw = min(w - 2 * margin, 470 * s)
         box = ((w - bw) / 2, 44 * s, (w + bw) / 2, h - 44 * s)
-        draw.rounded_rectangle(box, radius=22 * s, fill=(38, 40, 47, 238), outline=(255, 255, 255, 65), width=stroke)
+        rounded_rectangle(draw, box, 22 * s, fill=(38, 40, 47, 238), outline=(255, 255, 255, 65), width=stroke)
         for i, line in enumerate(ui["help_lines"] + [f"꼬집기 {pinch_enter:.2f} / 떼기 {pinch_exit:.2f} · {fps:.0f} FPS"]):
             write((box[0] + 20 * s, box[1] + (20 + i * 27) * s), line, normal if i == 0 else small,
                   WHITE if i == 0 else MUTED)
 
-    blurred = picture.resize((max(1, w // 3), max(1, h // 3))).filter(ImageFilter.GaussianBlur(2)).resize(picture.size)
-    picture = Image.composite(blurred, picture, material)
+    picture = blur_under(picture, material)
     picture = Image.alpha_composite(picture, overlay).convert("RGB")
     return cv2.cvtColor(np.asarray(picture), cv2.COLOR_RGB2BGR)
 
@@ -338,7 +379,7 @@ HELP_LINES = [
     "오른손 손등: 마우스 · 오른손 검지 꼬집어 이동 · 왼손 손등 꼬집기 1회 좌 / 2회 우 / 유지 누름",
     "키보드 시험: 1~4 왼손 검지~소지 · 7 8 9 0 오른손 · Space 왼손 주먹 · Backspace 오른손 주먹",
     "T 손끝 라벨 · K 자판 지도 · D 진단 수치(꼬집기 거리) · [ ] 꼬집기 판정 거리",
-    "P 일시정지 · S 저장 · G 스크린샷 · H 닫기 · Q 종료",
+    "P 일시정지 · S 저장 · G 스크린샷 · F 전체 화면 · H 닫기 · Q 종료",
 ]
 
 
@@ -453,11 +494,19 @@ def run(args):
 
     try:
         with create_detector(args.model) as detector:
-            capture = open_capture(cv2, args)
+            size = capture_size(args.resolution)
+            capture = open_capture(cv2, args, size)
             cv2.namedWindow(WINDOW, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(WINDOW, 960, 720)
+            window_ready, fullscreen = False, False
             while True:
                 frame, gap = read_frame(cv2, capture)
+                if not window_ready:
+                    fh, fw = frame.shape[:2]
+                    small = detection_frame(cv2, frame, args.detect_width).shape
+                    requested = "GStreamer 파이프라인" if args.pipeline else f"요청 {size[0]}x{size[1]}"
+                    print(f"카메라 해상도 {fw}x{fh} ({requested}), 손 검출 입력 {small[1]}x{small[0]}", flush=True)
+                    cv2.resizeWindow(WINDOW, *window_size(fw, fh))
+                    window_ready = True
                 if gap:
                     typer.reset()
                 now = time.monotonic()
@@ -476,7 +525,8 @@ def run(args):
                     frame = cv2.flip(frame, 1)
                 h, w = frame.shape[:2]
                 timestamp = max(timestamp + 1, int(now * 1000))
-                hands = assign_hands(detect_hands(cv2, mp, detector, frame, timestamp, args.mirror))
+                hands = assign_hands(detect_hands(cv2, mp, detector, detection_frame(cv2, frame, args.detect_width),
+                                                  timestamp, args.mirror))
                 signals = build_signals(hands, w, h, args.mirror)
                 enabled = not ui["paused"] and not ui["show_help"]
                 events = typer.update(signals, now) if enabled else []
@@ -539,6 +589,10 @@ def run(args):
                     typer.make_fist("Right", now)
                 elif code in (ord("s"), ord("S")):
                     action("save")
+                elif code in (ord("f"), ord("F")):
+                    fullscreen = not fullscreen
+                    cv2.setWindowProperty(WINDOW, cv2.WND_PROP_FULLSCREEN,
+                                          cv2.WINDOW_FULLSCREEN if fullscreen else cv2.WINDOW_NORMAL)
                 elif code in (ord("p"), ord("P")):
                     action("pause")
                 elif code in (ord("h"), ord("H")):
@@ -575,6 +629,11 @@ def main():
     parser.add_argument("--model", type=Path, default=ROOT / "src/models/MediaPipe/hand_landmarker.task")
     parser.add_argument("--font", help="한글 폰트 ttf/ttc/otf 경로")
     parser.add_argument("--mirror", action="store_true", help="좌우 반전 (카메라가 사람을 마주 보는 셀카 배치)")
+    parser.add_argument("--resolution", type=parse_resolution, default="auto",
+                        help="카메라 번호로 열 때 요청할 해상도. auto: macOS 1280x720, 그 밖(Jetson) 640x480. "
+                             "--pipeline이면 파이프라인 문자열이 정한다")
+    parser.add_argument("--detect-width", type=int, default=640,
+                        help="손 검출에 넣는 영상의 최대 가로 크기. 화면은 원래 해상도로 그린다")
     parser.add_argument("--pinch-enter", type=positive_float, default=PINCH_ENTER,
                         help="엄지 끝~손가락 끝마디 거리 / 손목~중지 뿌리 길이가 이 값 아래면 꼬집은 것으로 본다")
     parser.add_argument("--pinch-exit", type=positive_float, default=PINCH_EXIT, help="이 값 위로 벌리면 1회로 센다")
@@ -593,6 +652,8 @@ def main():
         return
     if args.pinch_exit <= args.pinch_enter:
         parser.error("--pinch-exit는 --pinch-enter보다 커야 합니다.")
+    if args.detect_width < 160:
+        parser.error("--detect-width는 160 이상으로 지정하세요.")
     if args.pipeline == "usb":
         args.pipeline = GSTREAMER
     try:

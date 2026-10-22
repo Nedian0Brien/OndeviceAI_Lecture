@@ -36,6 +36,10 @@ DISTAL = ((7, 8), (11, 12), (15, 16), (19, 20))  # 손가락 끝마디(DIP→TIP
 # 판정값은 모든 사람에게 같은 고정값이다. 사용자별 보정 단계는 두지 않는다(2026-10-20 결정).
 # 아래 값은 실측 로그(--log)로 다시 정할 임시값이다.
 PINCH_ENTER, PINCH_EXIT, PINCH_MARGIN, PINCH_MIN_CONTACT = 0.25, 0.38, 0.03, 0.04
+# 떼기: exit 위로 벌리면 항상 뗌. 빠르게 연속으로 꼬집을 때는 exit까지 벌리지 않으므로(2026-10-22 로그: 0.33~0.37),
+# 접촉 중 가장 낮았던 값보다 RELEASE_RISE 이상 올라가고 enter + RELEASE_FLOOR를 넘어도 뗀 것으로 본다.
+# landmark가 한 프레임만 튀는 경우(같은 로그: 0.17 → 0.58 → 0.18)를 떼기로 세지 않도록 RELEASE_FRAMES 연속을 요구한다.
+RELEASE_RISE, RELEASE_FLOOR, RELEASE_FRAMES = 0.12, 0.05, 2
 FACING_THRESHOLD, FACING_DWELL = 0.25, 0.15
 TAP_MAX, DOUBLE_WINDOW, CURSOR_GAIN, CURSOR_SETTLE = 0.25, 0.35, 2.0, 0.06
 CURL_ANGLE, EXTEND_ANGLE = 130.0, 155.0
@@ -155,8 +159,9 @@ class FingerPinch:
 
     - 가장 가까운 손끝이 enter 아래이고 두 번째 손끝보다 margin 이상 가까워야 접촉을 시작한다.
       중지를 꼬집으면 약지 끝마디도 함께 가까워지므로, 비율이 아니라 거리 차이로 본다.
-    - 그 손끝이 exit 위로 벌어지면 1회. min_contact보다 짧거나, 접촉 중 주먹이 되거나 다른 두 손가락
-      이상이 굽으면(주먹을 쥐는 도중) 버린다.
+    - 그 손끝이 떼기 기준(release_level) 위로 release_frames 프레임 연속 벌어지면 1회. 떼기 기준은 exit와,
+      접촉 중 최저값 + RELEASE_RISE(단 enter + RELEASE_FLOOR 이상) 중 작은 값이다.
+      min_contact보다 짧거나, 접촉 중 주먹이 되거나 다른 두 손가락 이상이 굽으면(주먹을 쥐는 도중) 버린다.
     - 처음 보이는 손이나 유실 후 돌아온 손은 모든 손끝이 enter 밖에 있는 상태를 한 번 거쳐야 한다
       (이미 꼬집은 채 나타난 손을 입력으로 세지 않기 위해).
     """
@@ -172,6 +177,11 @@ class FingerPinch:
         self.active: Optional[int] = None
         self.since: Optional[float] = None
         self.spoiled = False
+        self.low = 1.0  # 접촉 중 꼬집는 손끝의 최저 비율
+        self.opened = 0  # 떼기 기준 위로 연속된 프레임 수
+
+    def release_level(self):
+        return min(self.exit, max(self.enter + RELEASE_FLOOR, self.low + RELEASE_RISE))
 
     def _check(self, signal):
         others = sum(curled for index, curled in enumerate(signal.curled) if index != self.active)
@@ -190,21 +200,31 @@ class FingerPinch:
             first, second = sorted(range(len(ratios)), key=ratios.__getitem__)[:2]
             if ratios[first] < self.enter and ratios[second] - ratios[first] >= self.margin:
                 self.active, self.since, self.spoiled = first, now, False
+                self.low, self.opened = ratios[first], 0
                 self._check(signal)
             return None
         self._check(signal)
-        if ratios[self.active] <= self.exit:
+        value = ratios[self.active]
+        if value <= self.release_level():
+            self.low, self.opened = min(self.low, value), 0
+            return None
+        self.opened += 1
+        if self.opened < RELEASE_FRAMES:
             return None
         finger, duration, spoiled = self.active, now - self.since, self.spoiled
         self.active = self.since = None
-        self.spoiled = False
+        self.spoiled, self.low, self.opened = False, 1.0, 0
         if spoiled or duration < self.min_contact:
             return None
         return finger, duration
 
 
 class Orientation:
-    """손바닥(palm) / 손등(back) / 회전 중(turning). 바뀐 방향은 dwell초 유지되어야 인정한다."""
+    """손바닥(palm) / 손등(back) / 회전 중(turning). 바뀐 방향은 dwell초 유지되어야 인정한다.
+
+    인정한 방향은 새 방향(turning 포함)이 dwell초 이어질 때까지 유지한다. landmark가 한 프레임만 튀어
+    방향 값이 흔들려도(2026-10-22 로그: +0.6 → -0.23 → +0.6) 입력이 끊기지 않게 하기 위해서다.
+    """
 
     def __init__(self, threshold=FACING_THRESHOLD, dwell=FACING_DWELL):
         self.threshold, self.dwell = threshold, dwell
@@ -227,7 +247,10 @@ class Orientation:
         raw = "palm" if facing > self.threshold else ("back" if facing < -self.threshold else "turning")
         if raw != self.raw:
             self.raw, self.since = raw, now
-        self.state = raw if raw != "turning" and now - self.since >= self.dwell else "turning"
+        if now - self.since >= self.dwell:
+            self.state = raw
+        elif self.state is None:
+            self.state = "turning"
         return self.state
 
 
@@ -432,7 +455,8 @@ class PinchTyper:
     def _move(self, hand, now, events):
         """오른손 손등 + 검지 꼬집기 유지 = 커서 상대 이동(트랙패드처럼 놓고 다시 잡는다)."""
         signal = hand.signal
-        if signal is None or hand.orientation.state != "back" or hand.pinch.active != 0:
+        # 떼기 확인(연속 프레임)을 기다리는 동안에도 손가락은 이미 벌어졌으므로 이동을 멈춘다.
+        if signal is None or hand.orientation.state != "back" or hand.pinch.active != 0 or hand.pinch.opened:
             self.clutch = None
             return
         x, y = signal.anchor

@@ -279,6 +279,37 @@ def hud_text_sprite(text, font, fill, anchor, stroke_width, stroke_fill):
     return sprite, left, top
 
 
+def rounded_rectangle(draw, bounds, radius, **style):
+    """Pillow rounded_rectangle을 안전하게 그린다.
+
+    Pillow 12.3은 좌표가 소수이고 폭이 반지름의 2배에 가까우면 ValueError를 낸다(무작위 2만 회 중 8%).
+    좌표를 정수로 반올림하고 반지름을 짧은 변의 절반 이하로 제한하면 발생하지 않는다.
+    """
+    x1, y1, x2, y2 = (round(v) for v in bounds)
+    draw.rounded_rectangle((x1, y1, x2, y2), radius=max(0, min(round(radius), (x2 - x1) // 2, (y2 - y1) // 2)),
+                           **style)
+
+
+def blur_under(picture, mask, pad=8):
+    """mask가 칠해진 영역(경계 상자 + pad)만 1/3 축소 · Gaussian blur · 확대해 picture에 합성한다.
+
+    유리 재질 아래 영상만 흐리게 하는 용도다. 프레임 전체를 처리하던 방식보다 640x480에서 약 2.6배,
+    1920x1080에서 약 2.7배 빠르다(Jetson 저해상도 시연과 macOS 고해상도 모두 해당).
+    """
+    from PIL import Image, ImageFilter
+
+    box = mask.getbbox()
+    if box is None:
+        return picture
+    x1, y1 = max(0, box[0] - pad), max(0, box[1] - pad)
+    x2, y2 = min(picture.width, box[2] + pad), min(picture.height, box[3] + pad)
+    region = picture.crop((x1, y1, x2, y2))
+    factor = max(1, min(3, region.width, region.height))
+    blurred = region.reduce(factor).filter(ImageFilter.GaussianBlur(2)).resize(region.size, Image.BILINEAR)
+    picture.paste(Image.composite(blurred, region, mask.crop((x1, y1, x2, y2))), (x1, y1))
+    return picture
+
+
 def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_mask=False,
             show_help=False, notice_since=None, fist_hold=0.18, tap_enter=TAP_ENTER,
             hint=None, help_lines=None, cursors=()):
@@ -289,7 +320,7 @@ def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_
     """
     import cv2
     import numpy as np
-    from PIL import Image, ImageDraw, ImageFilter
+    from PIL import Image, ImageDraw
 
     h, w = frame.shape[:2]
     scale = min(w / 640, h / 480)
@@ -323,9 +354,9 @@ def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_
             draw.ellipse(bounds, fill=fill, outline=edge, width=stroke)
             draw.arc(bounds, 205, 325, fill=(255, 255, 255, 125), width=stroke)
         else:
-            draw.rounded_rectangle(shadow, radius=radius, fill=(0, 0, 0, 25))
-            mask_draw.rounded_rectangle(bounds, radius=radius, fill=205)
-            draw.rounded_rectangle(bounds, radius=radius, fill=fill, outline=edge, width=stroke)
+            rounded_rectangle(draw, shadow, radius, fill=(0, 0, 0, 25))
+            rounded_rectangle(mask_draw, bounds, radius, fill=205)
+            rounded_rectangle(draw, bounds, radius, fill=fill, outline=edge, width=stroke)
 
     # 한 줄만 보이는 입력 캡슐. 전체 텍스트는 조합기에 유지하고 저장한다.
     text = ime.text.split("\n")[-1] if ime.text else (hint or "마디를 눌러 입력 · 주먹은 지움")
@@ -466,8 +497,7 @@ def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_
         box_width = min(w - 2 * margin, 440 * scale)
         box = ((w - box_width) / 2, 60 * scale, (w + box_width) / 2, h - 60 * scale)
         # 명시적으로 연 도움말에서만 단축키와 진단 정보를 보여준다.
-        draw.rounded_rectangle(box, radius=24 * scale, fill=(38, 40, 47, 235),
-                               outline=(255, 255, 255, 65), width=stroke)
+        rounded_rectangle(draw, box, 24 * scale, fill=(38, 40, 47, 235), outline=(255, 255, 255, 65), width=stroke)
         help_lines = help_lines or (
             "손마디 천지인",
             "엄지로 마디를 누르면 입력 · 주먹을 쥐면 지움",
@@ -484,9 +514,7 @@ def draw_ui(frame, ime, hands, status, fonts, fps, paused, enhanced=False, show_
                   font=normal if i == 0 else small, fill=white if i == 0 else muted)
 
     # 실제 영상은 유리 표면 안에서만 흐려진다. 나머지 영상은 원본 그대로다.
-    blurred = picture.resize((max(1, w // 3), max(1, h // 3)))
-    blurred = blurred.filter(ImageFilter.GaussianBlur(2)).resize(picture.size)
-    picture = Image.composite(blurred, picture, material_mask)
+    picture = blur_under(picture, material_mask)
     picture = Image.alpha_composite(picture, overlay).convert("RGB")
     return cv2.cvtColor(np.asarray(picture), cv2.COLOR_RGB2BGR)
 
@@ -501,14 +529,18 @@ def is_window_closed(cv2, name):
     return visible == 0
 
 
-def open_capture(cv2, args):
-    """--pipeline이 있으면 GStreamer, 없으면 카메라 번호로 640x480 캡처를 연다."""
+def open_capture(cv2, args, size=(640, 480)):
+    """--pipeline이 있으면 GStreamer, 없으면 카메라 번호로 캡처를 연다.
+
+    size는 카메라 번호로 열 때 요청하는 해상도다. 카메라가 지원하지 않으면 가까운 값이 들어온다.
+    GStreamer 파이프라인은 문자열 안의 width/height가 해상도를 정한다(GSTREAMER는 640x480).
+    """
     capture = (cv2.VideoCapture(args.pipeline, cv2.CAP_GSTREAMER) if args.pipeline
                else cv2.VideoCapture(args.camera))
     if not capture.isOpened():
         raise RuntimeError("카메라를 열 수 없습니다. --camera 또는 --pipeline 값을 확인하세요.")
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    capture.set(cv2.CAP_PROP_FRAME_WIDTH, size[0])
+    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, size[1])
     return capture
 
 
@@ -556,8 +588,10 @@ def detect_hands(cv2, mp, detector, frame, timestamp, mirrored):
     for landmarks, world, handedness in zip(result.hand_landmarks, result.hand_world_landmarks, result.handedness):
         category = handedness[0]
         label = category.category_name
-        # MediaPipe handedness는 selfie(좌우 반전) 영상을 기준으로 한다.
-        if not mirrored:
+        # MediaPipe Tasks(1.1.1 확인)는 입력 영상에 보이는 실제 손을 라벨로 낸다. 공식 테스트 이미지
+        # right_hands.jpg(오른손 손등)는 원본에서 Right, 좌우 반전하면 Left다. 예전 Hands 솔루션 문서의
+        # "selfie(좌우 반전) 영상 기준" 가정은 맞지 않는다. 영상을 반전했을 때만 실제 손으로 되돌린다.
+        if mirrored:
             label = "Left" if label == "Right" else "Right"
         # handedness 점수는 좌/우 분류 확신도이며 손 검출 확신도가 아니다.
         # 검출된 오른손을 추가 점수 임계값으로 누락시키지 않는다.

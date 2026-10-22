@@ -115,6 +115,36 @@ class FingerPinchTest(unittest.TestCase):
             results.append(pinch.update(frame, now))
         self.assertEqual([r for r in results if r], [])
 
+    def test_rapid_taps_without_full_release_count_each(self):
+        # 2026-10-22 로그(오른손 약지): 꼬집기 사이에 0.33~0.37까지만 벌려도 각각 1회다.
+        pinch, now, events = FingerPinch(), 0.0, []
+        values = [0.6] * 3 + [0.13] * 4 + [0.33] * 3 + [0.04] * 4 + [0.34] * 3 + [0.08] * 4 + [0.37] * 3 + [0.6] * 2
+        for value in values:
+            now += DT
+            result = pinch.update(sig((0.6, 0.6, value, 0.7)), now)
+            if result:
+                events.append(result[0])
+        self.assertEqual(events, [2, 2, 2])
+
+    def test_single_frame_spike_is_not_a_release(self):
+        # 같은 로그(왼손 약지): 0.17 → 0.58(한 프레임) → 0.18은 한 번의 꼬집기다.
+        pinch, now, events = FingerPinch(), 0.0, []
+        for value in [0.6] * 3 + [0.17] * 3 + [0.58] + [0.18] * 4 + [0.6] * 3:
+            now += DT
+            result = pinch.update(sig((0.6, 0.6, value, 0.7)), now)
+            if result:
+                events.append(result[0])
+        self.assertEqual(events, [2])
+
+    def test_jitter_inside_a_held_pinch_is_not_a_release(self):
+        pinch, now, events = FingerPinch(), 0.0, []
+        for value in [0.6] * 3 + [0.04, 0.17, 0.05, 0.16, 0.06, 0.2, 0.05] + [0.6] * 3:
+            now += DT
+            result = pinch.update(sig((0.6, 0.6, value, 0.7)), now)
+            if result:
+                events.append(result[0])
+        self.assertEqual(events, [2])
+
     def test_lost_hand_drops_contact(self):
         pinch, now = FingerPinch(), 0.0
         for frame in [sig()] * 2 + [sig(pinch_ratios_for(2))] * 3 + [None] + [sig()] * 3:
@@ -132,8 +162,16 @@ class OrientationTest(unittest.TestCase):
         self.assertEqual(states[0], "turning")
         self.assertEqual(states[5], "palm")
         self.assertEqual(states[6], "palm")  # 0.2 > 0.25/2: 히스테리시스로 유지
-        self.assertEqual(states[8], "turning")
+        self.assertEqual(states[8], "palm")  # 손등이 dwell만큼 이어지기 전에는 앞 방향을 유지
         self.assertEqual(states[-1], "back")
+
+    def test_single_frame_glitch_keeps_state(self):
+        orientation, now = Orientation(dwell=0.15), 0.0
+        states = []
+        for facing in [0.6] * 6 + [-0.23] + [0.6] * 3:
+            now += DT
+            states.append(orientation.update(facing, now))
+        self.assertEqual(states[5:], ["palm"] * 5)
 
 
 class GeometryTest(unittest.TestCase):
@@ -361,6 +399,44 @@ class AppHelpersTest(unittest.TestCase):
                 OsMouse(1000)
         finally:
             builtins.__import__ = real_import
+
+
+class CameraSizeTests(unittest.TestCase):
+    def test_resolution_argument(self):
+        import argparse
+        from pinch_cheonjiin import parse_resolution
+
+        self.assertEqual(parse_resolution("auto"), "auto")
+        self.assertEqual(parse_resolution("1280x720"), (1280, 720))
+        self.assertEqual(parse_resolution("1920X1080"), (1920, 1080))
+        for bad in ("720p", "100x50", "x"):
+            with self.assertRaises(argparse.ArgumentTypeError):
+                parse_resolution(bad)
+
+    def test_auto_keeps_jetson_at_640x480(self):
+        from pinch_cheonjiin import capture_size
+
+        self.assertEqual(capture_size("auto", "linux"), (640, 480))
+        self.assertEqual(capture_size("auto", "darwin"), (1280, 720))
+        self.assertEqual(capture_size((1920, 1080), "linux"), (1920, 1080))
+
+    def test_detection_frame_is_capped_and_keeps_aspect(self):
+        import numpy as np
+        import cv2
+        from pinch_cheonjiin import detection_frame
+
+        small = np.zeros((480, 640, 3), np.uint8)
+        self.assertIs(detection_frame(cv2, small, 640), small)
+        self.assertEqual(detection_frame(cv2, np.zeros((720, 1280, 3), np.uint8), 640).shape, (360, 640, 3))
+        self.assertEqual(detection_frame(cv2, np.zeros((1080, 1920, 3), np.uint8), 640).shape, (360, 640, 3))
+
+    def test_window_size(self):
+        from pinch_cheonjiin import window_size
+
+        self.assertEqual(window_size(640, 480), (960, 720))
+        self.assertEqual(window_size(1280, 720), (1280, 720))
+        self.assertEqual(window_size(1920, 1080), (1440, 810))
+        self.assertEqual(window_size(1920, 1440), (1200, 900))
 
 
 if __name__ == "__main__":

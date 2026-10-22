@@ -428,5 +428,78 @@ class GeometryTests(unittest.TestCase):
         self.assertEqual(targets, [])
 
 
+class DrawingTests(unittest.TestCase):
+    def test_rounded_rectangle_survives_fractional_near_circle_bounds(self):
+        import random
+        from PIL import Image, ImageDraw
+        from project01 import rounded_rectangle
+
+        draw = ImageDraw.Draw(Image.new("RGBA", (1280, 720)))
+        # Pillow 12.3에서 ValueError가 나던 실제 좌표 (pinch_cheonjiin 1280x720 손끝 라벨)
+        rounded_rectangle(draw, (400.791, 559.157, 429.791, 586.779), 13.81097210380915,
+                          fill=(1, 1, 1, 1), outline=(2, 2, 2, 2), width=2)
+        rng = random.Random(0)
+        for _ in range(2000):
+            x, y, height = rng.uniform(0, 1200), rng.uniform(0, 650), rng.uniform(12, 40)
+            bounds = (x, y, x + height + rng.uniform(0, 3), y + height)
+            rounded_rectangle(draw, bounds, height / 2, fill=(1, 1, 1, 1), outline=(2, 2, 2, 2), width=2)
+
+    def test_blur_under_changes_only_masked_area(self):
+        from PIL import Image, ImageDraw
+        from project01 import blur_under
+
+        rng = np.random.default_rng(0)
+        picture = Image.fromarray(rng.integers(0, 255, (120, 160, 4), dtype=np.uint8), "RGBA")
+        before = np.asarray(picture).copy()
+        mask = Image.new("L", picture.size)
+        ImageDraw.Draw(mask).rectangle((40, 30, 80, 60), fill=255)
+        after = np.asarray(blur_under(picture, mask))
+        self.assertTrue((after[:30] == before[:30]).all())
+        self.assertTrue((after[:, 90:] == before[:, 90:]).all())
+        self.assertFalse((after[35:55, 45:75] == before[35:55, 45:75]).all())
+        self.assertIs(blur_under(picture, Image.new("L", picture.size)), picture)
+
+
+class HandednessTests(unittest.TestCase):
+    """MediaPipe Tasks는 입력 영상에 보이는 실제 손을 라벨로 낸다. 반전한 영상에서만 라벨을 뒤집는다."""
+
+    @staticmethod
+    def fake(label):
+        point = SimpleNamespace(x=0.5, y=0.5, z=0.0)
+        result = SimpleNamespace(hand_landmarks=[[point] * 21], hand_world_landmarks=[[point] * 21],
+                                 handedness=[[SimpleNamespace(category_name=label, score=0.9)]])
+        detector = SimpleNamespace(detect_for_video=lambda image, timestamp: result)
+        cv2 = SimpleNamespace(cvtColor=lambda frame, code: frame, COLOR_BGR2RGB=None)
+        mp = SimpleNamespace(Image=lambda image_format, data: None, ImageFormat=SimpleNamespace(SRGB=None))
+        return cv2, mp, detector
+
+    def test_label_kept_for_unmirrored_and_swapped_for_mirrored(self):
+        from project01 import detect_hands
+
+        for raw, mirrored, expected in (("Right", False, "Right"), ("Left", False, "Left"),
+                                        ("Right", True, "Left"), ("Left", True, "Right")):
+            with self.subTest(raw=raw, mirrored=mirrored):
+                cv2, mp, detector = self.fake(raw)
+                self.assertEqual(detect_hands(cv2, mp, detector, None, 1, mirrored)[0][0], expected)
+
+    def test_real_landmarks_give_true_hand_and_facing(self):
+        import json
+        from pathlib import Path
+        from pinch_typer import palm_facing
+
+        data = json.loads((Path(__file__).resolve().with_name("fixtures") / "handedness.json").read_text(encoding="utf-8"))
+        for case in data["cases"]:
+            with self.subTest(source=case["source"]):
+                self.assertEqual(case["mediapipe_label"], case["true_hand"])
+                landmarks = [SimpleNamespace(x=x, y=y, z=z) for x, y, z in case["landmarks"]]
+                facing = palm_facing(landmarks, case["true_hand"], False, case["width"], case["height"])
+                self.assertEqual("palm" if facing > 0.25 else "back" if facing < -0.25 else "turning",
+                                 case["true_facing"])
+                # 같은 손을 좌우 반전한 영상: 좌표 x 반전 + 반전 표시. 방향은 같아야 한다.
+                flipped = [SimpleNamespace(x=1 - p.x, y=p.y, z=p.z) for p in landmarks]
+                self.assertAlmostEqual(palm_facing(flipped, case["true_hand"], True, case["width"], case["height"]),
+                                       facing, places=6)
+
+
 if __name__ == "__main__":
     unittest.main()

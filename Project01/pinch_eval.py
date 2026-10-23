@@ -1,10 +1,10 @@
-"""정답이 붙은 기록(pinch_cheonjiin.py --collect)을 지금 판정에 다시 흘려 "의도 → 실제 입력" 표를 낸다.
+"""정답이 붙은 기록(project01.py --collect)을 지금 판정에 다시 흘려 "의도 → 실제 입력" 표를 낸다.
 
-실행:  python 261018/pinch_eval.py 261018/data/collect-*.jsonl [-v] [--drop 0.15 --window 0.5 ...]
+실행:  python Project01/pinch_eval.py Project01/data/collect-*.jsonl [-v] [--drop 0.15 --window 0.5 ...]
 
 - 로그의 프레임 신호(ratios·curled·pose·facing)를 PinchTyper에 그대로 넣는다. 판정을 고친 뒤 같은 기록으로
   다시 돌리면 고친 효과를 바로 비교할 수 있다. 판정값은 옵션으로 바꿔 볼 수 있다.
-- 앱과 같게, 새 차례가 시작될 때 직전 접촉을 버린다(pinch_cheonjiin.run의 기록 모드 처리).
+- 앱과 같게, 새 차례가 시작될 때 직전 접촉을 버린다(project01.run의 기록 모드 처리).
 - 차례마다 안내한 손·방향(손바닥/손등)에서 나온 꼬집기 입력을 모두 모은다. 판정이 차례를 넘기지 못한 동안 사용자가 여러 번
   꼬집었을 수 있으므로, "첫 입력"과 "모든 입력"을 따로 센다.
 - 안내한 손이 EVAL_MIN_FRAMES 프레임 미만 보인 차례는 평가에서 뺀다(차례가 곧바로 넘어간 경우 등).

@@ -2,9 +2,9 @@
 
 손 카메라 영상으로 한글 천지인 입력을 하는 프로젝트입니다. MediaPipe Hand Landmarker로 손 landmark를 추적하고, 입력 결과를 카메라 영상 위 HUD로 표시하며 `S`로 UTF-8 텍스트 파일에 저장합니다. 다른 프로그램에 키 입력을 전달하는 OS 입력기는 포함하지 않습니다.
 
-현재 주 버전은 **손끝 꼬집기 입력기(`pinch_cheonjiin.py`)** 입니다. 엄지로 손끝을 꼬집으면 그 손가락이 버튼이고, 같은 손가락을 꼬집은 횟수로 그룹 안의 자모를 고릅니다. 목표 용도가 패스스루 VR이라, 카메라는 **눈 위치에서 손을 내려다보는 1인칭 배치**를 기준으로 합니다(기본값: 좌우 반전 없음). 설계 근거는 `.intent/*_pinch-cheonjiin.md`에 있습니다. 앞서 시도한 방식은 [이전 시도](#이전-시도)에 정리했습니다.
+현재 주 버전은 **손끝 꼬집기 입력기(`project01.py`)** 입니다. 엄지로 손끝을 꼬집으면 그 손가락이 버튼이고, 같은 손가락을 꼬집은 횟수로 그룹 안의 자모를 고릅니다. 목표 용도가 패스스루 VR이라, 카메라는 **눈 위치에서 손을 내려다보는 1인칭 배치**를 기준으로 합니다(기본값: 좌우 반전 없음). 설계 근거는 `.intent/*_pinch-cheonjiin.md`에 있습니다. 앞서 시도한 방식은 [이전 시도](#이전-시도)에 정리했습니다.
 
-## 손끝 꼬집기 입력기 (`pinch_cheonjiin.py`)
+## 손끝 꼬집기 입력기 (`project01.py`)
 
 ### 자판
 
@@ -44,13 +44,13 @@
 ### 실행
 
 ```bash
-python 261018/pinch_cheonjiin.py --camera 0                 # 1인칭 카메라 (iPhone 연결 시 0번)
-python 261018/pinch_cheonjiin.py --camera 0 --log 261018/data/pinch-log.jsonl   # 손 신호·landmark 기록(판정값 조정용)
-python 261018/pinch_cheonjiin.py --camera 0 --collect      # 기록 모드: 안내한 손가락을 꼬집어 정답이 붙은 기록을 남김
-python 261018/pinch_cheonjiin.py --mirror                   # 카메라가 사람을 마주 보는 셀카 배치
-python 261018/pinch_cheonjiin.py --camera 0 --resolution 1920x1080   # 카메라 해상도 직접 지정
-python 261018/pinch_cheonjiin.py --pipeline usb             # Jetson USB 카메라 (GStreamer 640x480 30fps)
-python 261018/pinch_cheonjiin.py --demo                     # 카메라 없이 '안녕하세요' 재생
+python Project01/project01.py --camera 0                 # 1인칭 카메라 (iPhone 연결 시 0번)
+python Project01/project01.py --camera 0 --log Project01/data/pinch-log.jsonl   # 손 신호·landmark 기록(판정값 조정용)
+python Project01/project01.py --camera 0 --collect      # 기록 모드: 안내한 손가락을 꼬집어 정답이 붙은 기록을 남김
+python Project01/project01.py --mirror                   # 카메라가 사람을 마주 보는 셀카 배치
+python Project01/project01.py --camera 0 --resolution 1920x1080   # 카메라 해상도 직접 지정
+python Project01/project01.py --pipeline usb             # Jetson USB 카메라 (GStreamer 640x480 30fps)
+python Project01/project01.py --demo                     # 카메라 없이 '안녕하세요' 재생
 ```
 
 | 키 | 기능 |
@@ -59,9 +59,9 @@ python 261018/pinch_cheonjiin.py --demo                     # 카메라 없이 '
 | Space / Backspace | 왼손 / 오른손 주먹(지움) 시험 |
 | `[` / `]` | 꼬집기 판정값 낮춤 / 높임 (잘 안 잡히면 `]`, 닿기 전에 입력되면 `[`) |
 | T / K / D | 손끝 라벨 / 화면 아래 자판 지도 / 손가락별 진단 수치 켜기·끄기 |
-| S / P / H | 저장(`261018/pinch_output.txt`) / 일시정지 / 도움말 |
+| S / P / H | 저장(`Project01/pinch_output.txt`) / 일시정지 / 도움말 |
 | C / X | 입력한 글 복사 / 전체 지우기 |
-| G | 진단 스크린샷 저장 (`261018/data/snapshots/`, 1초마다 자동 저장) |
+| G | 진단 스크린샷 저장 (`Project01/data/snapshots/`, 1초마다 자동 저장) |
 | F | 전체 화면 켜기·끄기 |
 | Q / Esc | 종료 |
 
@@ -95,11 +95,11 @@ python 261018/pinch_cheonjiin.py --demo                     # 카메라 없이 '
   - 절대 거리만 쓰지 않는 이유: 정답이 붙은 기록(2026-10-22)에서 쉬는 자세의 검지가 0.11~0.28로, 실제로 꼬집은 소지(0.17~0.23)만큼 가까웠습니다. 원래 가까운 손가락은 다가오지 않으므로 후보가 되지 않습니다.
 - 판정값은 모든 사람에게 같은 고정값이며 사용자별 보정 단계는 없습니다. `--collect`로 정답이 붙은 기록을 남기고 `pinch_eval.py`로 "의도 → 실제 입력" 표를 만들어 판정값을 정합니다.
   ```bash
-  python 261018/pinch_cheonjiin.py --camera 0 --collect      # 손마다 검지→소지 10바퀴 기록
-  python 261018/pinch_cheonjiin.py --camera 0 --collect --collect-set edit   # 왼손 손등 키(모음·공백·확정·문장부호) 기록
-  python 261018/pinch_cheonjiin.py --camera 0 --collect --collect-set right --save-video   # 오른손만 + 영상 저장
-  python 261018/pinch_cheonjiin.py --camera 0 --collect --collect-set words --save-video   # 단어 32개를 이어서 치기
-  python 261018/pinch_eval.py 261018/data/collect-*.jsonl -v  # 지금 판정으로 다시 돌려 표 출력
+  python Project01/project01.py --camera 0 --collect      # 손마다 검지→소지 10바퀴 기록
+  python Project01/project01.py --camera 0 --collect --collect-set edit   # 왼손 손등 키(모음·공백·확정·문장부호) 기록
+  python Project01/project01.py --camera 0 --collect --collect-set right --save-video   # 오른손만 + 영상 저장
+  python Project01/project01.py --camera 0 --collect --collect-set words --save-video   # 단어 32개를 이어서 치기
+  python Project01/pinch_eval.py Project01/data/collect-*.jsonl -v  # 지금 판정으로 다시 돌려 표 출력
   ```
 - 단어 기록(`--collect-set words`)은 단어를 하나씩 안내하고, 입력 칸이 그 단어가 되면 다음 단어로 넘어갑니다(틀리면 지우고 고쳐 칩니다. N 건너뜀, B 직전 다시). 단어 목록(`pinch_collect.WORDS`)에는 모든 자음 그룹, 모음 버튼의 세 가지(ㆍ·가로 ㅡ·세로 ㅣ), 복합 모음, 확정, 공백이 들어 있고, 단어마다 기대 단계를 입력기로 검증합니다(`word_steps`, 평가용 `word_keys`). `pinch_eval.py`는 단어 기록을 알아보고 기대 키 순서와 실제 꼬집기를 편집 거리로 맞춰 맞음·다른 손가락·더 들어감(오입력)·빠짐을 키별로 셉니다. 손가락 하나씩 쉬어 가며 안내하는 기록에는 손가락을 이어 옮길 때의 오입력(엄지가 검지를 지나감)이 나타나지 않아서 만들었습니다.
 - `--save-video`는 로그와 같은 이름의 `.mp4`(열리지 않으면 `.avi`)에 HUD를 그리기 전 카메라 프레임을 저장하고, 로그 행마다 영상 안 프레임 번호(`frame`)를 남깁니다. landmark만으로 구분되지 않는 자세(가려진 중지 꼬집기)를 영상으로 다시 보거나, 전처리·학습 모델을 같은 영상으로 비교할 때 씁니다. 영상의 재생 속도는 30fps로 고정되어 실제 시간과 다를 수 있으니, 시각은 로그의 `t`를 기준으로 합니다.
@@ -153,7 +153,7 @@ python -m pip install absl-py flatbuffers sounddevice certifi
 
 | 수업 기술 | 적용 |
 | --- | --- |
-| 이미지 조정 | 좌우 반전(`pinch_cheonjiin.py --mirror`, `project01.py`는 기본 반전), `--flip-vertical` 상하 반전(`project01.py`) |
+| 이미지 조정 | 좌우 반전(`project01.py --mirror`, `project01.py`는 기본 반전), `--flip-vertical` 상하 반전(`project01.py`) |
 | 색공간 변환 | MediaPipe 입력용 BGR→RGB. `project01.py`는 명도·피부색 처리에 LAB 사용 |
 | Image Enhancement·필터링 | `project01.py`의 `E`: LAB L 채널 CLAHE와 Gaussian blur |
 | Color Segmentation·형태학 연산·Contour | `project01.py`의 `M`: 손바닥 샘플의 LAB a/b 범위로 손 영역 마스크, opening/closing, 외곽선 표시 |
@@ -177,14 +177,14 @@ MediaPipe VIDEO 모드와 `detect_for_video`는 [공식 Python 안내](https://a
 - 키는 검지~소지 4개 손가락 × 끝·중간·뿌리 마디 3개, 모두 12곳의 중점에 놓입니다.
 - 엄지 끝과 마디 선분 사이 거리를 MediaPipe world 좌표로 재고, 12mm 안이면 누른 것으로 봅니다(`--tap-enter`, `--tap-exit`, 실행 중 `[` `]`).
 - 주먹은 지움입니다.
-- `python 261018/project01.py --camera 0`으로 실행하고, `--demo`로 카메라 없이 `안녕하세요` 조합을 확인합니다.
-- `tap_record.py`·`tap_eval.py`는 판정 방식을 비교하는 도구입니다. 안내에 따라 누르기·근접·띄우기·주먹 시행을 기록하고, 검출기별 정밀도·재현율·키 정확도·혼동 행렬을 냅니다. 카메라를 고정한 상태에서 기록해야 합니다. 세션은 `261018/data/tap/`에 저장되며 git에 포함하지 않습니다.
+- `python Project01/project01.py --camera 0`으로 실행하고, `--demo`로 카메라 없이 `안녕하세요` 조합을 확인합니다.
+- `tap_record.py`·`tap_eval.py`는 판정 방식을 비교하는 도구입니다. 안내에 따라 누르기·근접·띄우기·주먹 시행을 기록하고, 검출기별 정밀도·재현율·키 정확도·혼동 행렬을 냅니다. 카메라를 고정한 상태에서 기록해야 합니다. 세션은 `Project01/data/tap/`에 저장되며 git에 포함하지 않습니다.
 
 **선택 손 꼬집기 (`pinch_keyboard.py`)**
 - 왼손 손바닥을 자판으로 펴고, 오른손 엄지·검지 중점을 커서로 키 위에 둔 뒤 맞닿으면 입력합니다.
 - 오므리기 시작할 때 강조된 키를 고정해 입력하고, 두 손이 겹치면 자판 손 위치를 1.5초까지 유지합니다.
 - 왼손 주먹은 지움입니다.
-- `python 261018/pinch_keyboard.py --camera 0`으로 실행합니다.
+- `python Project01/pinch_keyboard.py --camera 0`으로 실행합니다.
 
 ## 코드 구성
 
@@ -192,7 +192,7 @@ MediaPipe VIDEO 모드와 `detect_for_video`는 [공식 Python 안내](https://a
 
 | 파일 | 역할 |
 | --- | --- |
-| `pinch_cheonjiin.py` | 주 버전 앱: 손끝 꼬집기 입력기(HUD, 순환 대기열, 실행 루프, 단축키, 기록 모드, 진단 스크린샷) |
+| `project01.py` | 주 버전 앱: 손끝 꼬집기 입력기(HUD, 순환 대기열, 실행 루프, 단축키, 기록 모드, 진단 스크린샷) |
 | `pinch_typer.py` | 주 버전의 판정 규칙: 손 신호(`HandSignal`), 손가락별 꼬집기(`FingerPinch`), 양손 입력기(`PinchTyper`). 카메라와 무관 |
 | `pinch_collect.py` | 기록 모드(`--collect`)의 차례 관리: 손마다 검지→소지 순서 안내, 건너뛰기·다시 하기, 결과 요약 |
 | `pinch_eval.py` | 정답이 붙은 기록을 지금 판정으로 다시 돌려 "의도 → 실제 입력" 표를 낸다 |
@@ -221,9 +221,9 @@ MediaPipe VIDEO 모드와 `detect_for_video`는 [공식 Python 안내](https://a
 ## 검증
 
 ```bash
-python -m unittest discover -s 261018 -p 'test_*.py' -v
-python 261018/pinch_cheonjiin.py --demo
-python 261018/project01.py --demo
+python -m unittest discover -s Project01 -p 'test_*.py' -v
+python Project01/project01.py --demo
+python Project01/project01.py --demo
 ```
 
 모든 테스트는 카메라 없이 돌아갑니다.
@@ -235,4 +235,4 @@ python 261018/project01.py --demo
 | `test_tap.py` | 마디 기하, 누르기 검출기 상태 머신, 시행 판정 지표, 세션 저장·불러오기 |
 | `test_pinch.py` | 꼬집기 판정과 키 고정, 손 역할 배정, 겹칠 때 자판 위치 유지, 주먹 지움 |
 
-실제 카메라에서는 꼬집기 비율 분포, 손 방향 판정, 거리·조명 변화, 손 가림을 따로 확인해야 합니다. `pinch_cheonjiin.py --log`로 손 신호를 기록하면 판정값을 다시 정할 수 있습니다.
+실제 카메라에서는 꼬집기 비율 분포, 손 방향 판정, 거리·조명 변화, 손 가림을 따로 확인해야 합니다. `project01.py --log`로 손 신호를 기록하면 판정값을 다시 정할 수 있습니다.

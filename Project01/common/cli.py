@@ -11,7 +11,7 @@ import math
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트 (common → 261018 → 루트)
+ROOT = Path(__file__).resolve().parents[2]  # 저장소 루트 (common → Project01 → 루트)
 DEFAULT_MODEL = ROOT / "src/models/MediaPipe/hand_landmarker.task"
 PIPELINE_HELP = "GStreamer 문자열. 'usb'는 practice의 /dev/video0 설정"
 

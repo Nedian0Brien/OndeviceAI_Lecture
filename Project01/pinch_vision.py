@@ -1,4 +1,4 @@
-"""Vision Pro 앱(261018/visionos)이 내장 Python으로 부르는 판정 세션 (표준 라이브러리만 사용).
+"""Vision Pro 앱(Project01/visionos)이 내장 Python으로 부르는 판정 세션 (표준 라이브러리만 사용).
 
 Swift가 프레임마다 ARKit 손 관절을 MediaPipe 21점 순서로 바꿔 JSON으로 넘기면, Mac 앱과 같은 코드
 (pinch_typer.hand_signal → PinchTyper.update → 천지인 조합)로 판정하고 화면에 필요한 상태를 JSON으로 돌려준다.
@@ -9,7 +9,7 @@ step(JSON) 입력
   - world: 관절 위치(m). 꼬집기 비율·관절 각도·굽힘은 거리·각도만 쓰므로 좌표계와 무관하다.
   - image: 머리(기기) 좌표를 MediaPipe 이미지 축에 맞춘 값(x 오른쪽, y 아래, z 멀어지는 쪽, m).
     손바닥 방향(2D 외적)·기울기(z)·자세(pose_from_image)가 쓴다. 손 이름은 ARKit chirality(실제 손), 반전 없음.
-step 출력(Mac 앱 HUD가 그리는 것과 같은 정보, pinch_cheonjiin.draw_hud)
+step 출력(Mac 앱 HUD가 그리는 것과 같은 정보, project01.draw_hud)
   {"events": [[종류, 값]], "text": 입력 글자, "pending": 마지막 글자가 확정 전 후보인가,
    "pending_punct": 후보가 문장부호인가(밑줄 없음),
    "group": 순환 중인 그룹 글자 목록 또는 null, "group_index": 그룹에서 지금 글자 위치,
@@ -42,7 +42,7 @@ command(JSON): {"cmd": "clear" | "log_start" | "log_stop" | "demo" | "info" | "s
   index_sweep = 오른손 검지 지나감 규칙, occlusion = 엄지 가림(기울기) 규칙. 바꾸면 진행 중인 접촉은 버린다.
   info: 내장 Python 버전과 고정 데이터 재생 결과(입력 칸은 바꾸지 않는다). 앱이 시작할 때 자기 점검으로 부른다.
 
-기록(log_start ~ log_stop)은 pinch_cheonjiin.log_row와 같은 필드로 남겨 pinch_eval.py가 그대로 읽는다.
+기록(log_start ~ log_stop)은 project01.log_row와 같은 필드로 남겨 pinch_eval.py가 그대로 읽는다.
 앱은 손 입력을 시작할 때 log_start, 끝낼 때 log_stop을 부른다(늘 기록, 사용자 2026-10-23). 파일은 1분에 약 8MB라
 새 기록을 시작할 때 최근 LOG_KEEP개만 남기고 지운다.
 """

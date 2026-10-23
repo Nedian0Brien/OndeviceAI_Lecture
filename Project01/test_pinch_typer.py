@@ -1,7 +1,7 @@
-"""손끝 꼬집기 입력(pinch_typer)과 앱(pinch_cheonjiin)의 카메라 없는 부분 검증.
+"""손끝 꼬집기 입력(pinch_typer)과 앱(project01)의 카메라 없는 부분 검증.
 
 상태 머신 테스트는 표준 라이브러리만 쓴다. CameraSizeTests는 numpy·OpenCV를 쓴다(검출 영상 축소).
-실행: python -m unittest discover -s 261018 -p 'test_*.py' -v
+실행: python -m unittest discover -s Project01 -p 'test_*.py' -v
 """
 
 import json
@@ -643,7 +643,7 @@ class CollectTest(unittest.TestCase):
         self.assertEqual(found, [("Right", 2, "palm")])
 
     def test_log_row_prompt_field(self):
-        from pinch_cheonjiin import log_row
+        from project01 import log_row
         typer = PinchTyper()
         self.assertNotIn("prompt", log_row(1.0, typer, {}, {}, [], 640, 480))
         self.assertIsNone(log_row(1.0, typer, {}, {}, [], 640, 480, True, None)["prompt"])
@@ -651,7 +651,7 @@ class CollectTest(unittest.TestCase):
         self.assertEqual(row["prompt"], {"id": 3, "hand": "Left", "finger": 2, "face": "back"})
 
     def test_collect_view(self):
-        from pinch_cheonjiin import collect_view
+        from project01 import collect_view
         from pinch_collect import Collector
         collector = Collector(reps=1)
         view = collect_view(collector, (0, "Left", 2, "palm"), None)
@@ -946,7 +946,7 @@ class WordCollectTest(unittest.TestCase):
         self.assertEqual([op[0] for op in align([a, b], [a])], ["match", "miss"])
 
     def test_word_view(self):
-        from pinch_cheonjiin import collect_view
+        from project01 import collect_view
         from pinch_collect import WordCollector
         collector = WordCollector(words=("바다",))
         view = collect_view(collector, collector.prompt(0.0), None)
@@ -1039,7 +1039,7 @@ class CycleQueueTest(unittest.TestCase):
         self.assertEqual(cycle_queue(typer, "Left", 3), [",", "?", "!"])
 
     def test_path_runs_from_label_to_knuckle(self):
-        from pinch_cheonjiin import finger_path_point
+        from project01 import finger_path_point
         points = [(0.0, 0.0)] * 21
         for i, y in zip((5, 6, 7, 8), (100.0, 70.0, 50.0, 30.0)):  # 검지 MCP~TIP이 위로 곧게
             points[i] = (10.0, y)
@@ -1051,7 +1051,7 @@ class CycleQueueTest(unittest.TestCase):
     def test_spread_folds_on_fist_and_unfolds_after_hold(self):
         # 손끝 버튼: 처음 보이는 손은 0에서 펼쳐지고, 주먹이면 SPREAD_CLOSE초에 접히고, 편 뒤 SPREAD_HOLD초가 지나야
         # SPREAD_OPEN초에 다시 펼쳐진다. 주먹 판정이 한 프레임씩 흔들려도 접힌 채로 있다.
-        from pinch_cheonjiin import SPREAD_CLOSE, SPREAD_HOLD, SPREAD_OPEN, spread_motion
+        from project01 import SPREAD_CLOSE, SPREAD_HOLD, SPREAD_OPEN, spread_motion
         spreads = {}
         self.assertEqual(spread_motion(spreads, "Left", False, 0.0), 0.0)
         self.assertEqual(spread_motion(spreads, "Left", False, SPREAD_OPEN), 1.0)
@@ -1072,7 +1072,7 @@ class CycleQueueTest(unittest.TestCase):
 
     def test_echo_appears_then_fades(self):
         # 입력 표시: 빠르게 나타나 머물다 커지며 사라진다. 새 입력(번호)마다 처음부터.
-        from pinch_cheonjiin import ECHO_HOLD, ECHO_IN, ECHO_OUT, echo_look, echo_view
+        from project01 import ECHO_HOLD, ECHO_IN, ECHO_OUT, echo_look, echo_view
         alpha, grow = echo_look(ECHO_IN / 2)
         self.assertAlmostEqual(alpha, 0.5)
         self.assertAlmostEqual(grow, 0.925)
@@ -1090,7 +1090,7 @@ class CycleQueueTest(unittest.TestCase):
         self.assertEqual(echo_view(ui, typer, 11.0)[:3], ("Right", "ㅋ", 0.0))
 
     def test_motion_only_when_queue_turns(self):
-        from pinch_cheonjiin import CYCLE_ANIM, cycle_motion
+        from project01 import CYCLE_ANIM, cycle_motion
         cycles = {}
         self.assertEqual(cycle_motion(cycles, ("Right", 0), ("ㄱ", "ㅋ", "ㄲ"), 0.0), (1.0, None))
         eased, previous = cycle_motion(cycles, ("Right", 0), ("ㅋ", "ㄲ", "ㄱ"), 1.0)  # 한 칸 돎
@@ -1102,7 +1102,7 @@ class CycleQueueTest(unittest.TestCase):
 
 
 class AppHelpersTest(unittest.TestCase):
-    """pinch_cheonjiin의 카메라 없는 부분: 손 배정, 버튼 판정, OS 마우스(B)."""
+    """project01의 카메라 없는 부분: 손 배정, 버튼 판정, OS 마우스(B)."""
 
     def test_assign_hands_by_position(self):
         from common.hands import assign_hands
@@ -1122,7 +1122,7 @@ class AppHelpersTest(unittest.TestCase):
     def test_facing_follows_mediapipe_label_not_position(self):
         """카메라가 손 맞은편에 있어 오른손이 화면 왼쪽에 보여도 손바닥이면 손바닥이다."""
         from common.hands import Detection, assign_hands
-        from pinch_cheonjiin import build_signals
+        from project01 import build_signals
 
         def palm_up(center, thumb_right):
             d = 1 if thumb_right else -1
@@ -1145,7 +1145,7 @@ class AppHelpersTest(unittest.TestCase):
         """--log 한 줄에 landmark가 들어가고, 재생에 쓰는 필드로 같은 신호를 다시 만들 수 있다."""
         from common.hands import Detection, assign_hands
         from common.synthetic import detection
-        from pinch_cheonjiin import build_signals, log_row
+        from project01 import build_signals, log_row
 
         image, world = detection()
         hands = assign_hands([Detection("Left", image, world, 0.9)])
@@ -1166,7 +1166,7 @@ class AppHelpersTest(unittest.TestCase):
         import tempfile
         import cv2
         import numpy as np
-        from pinch_cheonjiin import open_video
+        from project01 import open_video
 
         with tempfile.TemporaryDirectory() as folder:
             log = Path(folder) / "collect-test.jsonl"

@@ -1,6 +1,6 @@
 """손 카메라 입력기들이 함께 쓰는 공통 모듈.
 
-앱은 `python 261018/<앱>.py`로 실행하므로 261018 디렉터리가 import 경로에 들어간다.
+앱은 `python Project01/<앱>.py`로 실행하므로 Project01 디렉터리가 import 경로에 들어간다.
 그래서 별도 설치 없이 `from common.camera import open_capture`처럼 쓸 수 있다(Jetson에서도 같다).
 
 모듈 지도

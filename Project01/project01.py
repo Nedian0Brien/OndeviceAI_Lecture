@@ -3,8 +3,8 @@
 카메라를 눈 위치에 두고 손을 내려다본다. 손바닥이 카메라를 향하면 기본 자판, 손을 뒤집어 손등이 보이면
 왼손은 편집 키, 오른손은 아랫줄 자판이다. 자판과 규칙은 pinch_typer.py 머리말을 본다.
 
-실행:  python 261018/pinch_cheonjiin.py --camera 0
-시연:  python 261018/pinch_cheonjiin.py --demo
+실행:  python Project01/project01.py --camera 0
+시연:  python Project01/project01.py --demo
 """
 
 # 한 프레임의 처리 흐름 (run)

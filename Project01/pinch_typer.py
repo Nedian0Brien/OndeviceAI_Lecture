@@ -204,7 +204,7 @@ CYCLE_SHOWN = 3  # 손가락 위에 보이는 순환 글자 수(문장부호 그
 ECHO_NAMES = {" ": "공백", "\n": "줄바꿈"}  # 손바닥 가운데 입력 표시(PinchTyper.echo)에서 보이지 않는 글자의 이름
 
 
-# 손끝 라벨(화면 표시용). 앱(pinch_cheonjiin)과 Vision Pro 앱(pinch_vision)이 함께 쓴다.
+# 손끝 라벨(화면 표시용). 앱(project01)과 Vision Pro 앱(pinch_vision)이 함께 쓴다.
 
 def tip_text(typer, hand, finger):
     """손끝 라벨: 이 손가락을 지금 방향에서 다음에 꼬집으면 입력될 것(손이 회전 중이면 손바닥 자판). 없으면 None."""

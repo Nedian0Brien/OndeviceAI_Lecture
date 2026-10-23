@@ -1,6 +1,6 @@
 import Foundation
 
-/// 내장 Python(261018/pinch_vision.py의 Session)을 부르는 창구. Python 호출은 이 직렬 큐 하나에서만 한다.
+/// 내장 Python(Project01/pinch_vision.py의 Session)을 부르는 창구. Python 호출은 이 직렬 큐 하나에서만 한다.
 final class PythonEngine: @unchecked Sendable {
     private let queue = DispatchQueue(label: "pinch-keyboard.python")
     private var started = false

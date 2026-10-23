@@ -89,7 +89,7 @@ class DrawingTests(unittest.TestCase):
         from common.hud import rounded_rectangle
 
         draw = ImageDraw.Draw(Image.new("RGBA", (1280, 720)))
-        # Pillow 12.3에서 ValueError가 나던 실제 좌표 (pinch_cheonjiin 1280x720 손끝 라벨)
+        # Pillow 12.3에서 ValueError가 나던 실제 좌표 (project01 1280x720 손끝 라벨)
         rounded_rectangle(draw, (400.791, 559.157, 429.791, 586.779), 13.81097210380915,
                           fill=(1, 1, 1, 1), outline=(2, 2, 2, 2), width=2)
         rng = random.Random(0)

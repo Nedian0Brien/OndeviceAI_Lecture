@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Mac 앱 HUD(261018/pinch_cheonjiin.py, common/hud.py)와 같은 색·모양.
+/// Mac 앱 HUD(Project01/project01.py, common/hud.py)와 같은 색·모양.
 /// 선 HUD(2026-10-23): 가는 선과 눈금으로 정보를 나타내고 강조는 채도 낮은 파랑 한 가지다.
 enum HUD {
     static func rgba(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 255) -> Color {

@@ -6,11 +6,18 @@ PinchKeyboard는 카메라로 두 손을 추적해, 엄지로 손끝을 꼬집�
 
 목표 기기는 패스스루 VR(카메라 영상 위에 가상 화면을 겹쳐 보는 기기)입니다. 그래서 카메라가 눈 위치에서 손을 내려다보는 1인칭 배치를 기준으로 만들었습니다.
 
-| 단어 입력 | 주먹으로 지우기 |
-| --- | --- |
-| [![단어 입력 시연 영상](docs/images/demo-words.jpg)](docs/videos/demo-words.mp4) | [![주먹 지우기 시연 영상](docs/images/demo-delete.jpg)](docs/videos/demo-delete.mp4) |
+**단어 입력 시연**
+
+https://github.com/user-attachments/assets/de5a2699-6fd5-4d8c-9abb-942ea28216d4
+
+**주먹으로 지우기 시연**
+
+https://github.com/user-attachments/assets/b0a4bb92-470f-400b-8aa0-d6bf73dacc56
+
+*Vision Pro 시험 앱(`visionos/`) 화면을 녹화했습니다.*
 
 *시연 영상. 그림을 누르면 열립니다. Vision Pro 시험 앱(`visionos/`) 화면을 녹화했습니다.*
+
 
 ## 파일 구조
 
@@ -383,16 +390,6 @@ flowchart TB
 
 **AI 활용**: 소스 코드 개발, 로그 데이터 분석, 사람이 제안한 개선안의 구현, 그리고 코드 모듈화 및 리팩토링을 수행했습니다. 특히 본 프로젝트에서의 주된 테스트 환경인 VisionOS Swift 환경에서 Python 기반의 코드가 원활하게 작동하도록 포팅하는 데에 적극적으로 활용했습니다.
 
-### 참고 자료
-
-1. P. Streli, M. Richardson, F. Botros, S. Ma, R. Wang, C. Holz. "TouchInsight: Uncertainty-aware Rapid Touch and Text Input for Mixed Reality from Egocentric Vision." UIST 2024. [arXiv:2410.05940](https://arxiv.org/abs/2410.05940) (Quest 3, Meta XR Core SDK Virtual Keyboard 허공 입력 조건)
-2. V. Dhakal, A. M. Feit, P. O. Kristensson, A. Oulasvirta. "Observations on Typing from 136 Million Keystrokes." CHI 2018. [PDF](https://www.pokristensson.com/pubs/DhakalEtAlCHI2018.pdf)
-3. Apple. "Type on Apple Vision Pro." [Apple Vision Pro 사용 설명서](https://support.apple.com/guide/apple-vision-pro/tana14220eef/visionos)
-4. Omdia. "Global AI glasses shipments reach 8.7 million units…" 2026-03. [보도자료](https://omdia.tech.informa.com/pr/2026/mar/global-ai-glasses-shipments-reach-8point7-million-units-with-mainland-china-emerging-as-the-fastest-growing-market)
-5. Tom's Guide. "Meta Ray-Ban Display glasses announced — release date, price, features, neural link band and more." [기사](https://www.tomsguide.com/computing/smart-glasses/meta-ray-ban-display-glasses-features-neural-link-price-and-availability)
-6. UploadVR. "Meta VR Glasses Officially Announced, Shipping Spring 2027 For $1300." [기사](https://www.uploadvr.com/meta-vr-glasses-officially-announced-connect-2026/)
-7. J. J. Dudley, H. Benko, D. Wigdor, P. O. Kristensson. "Performance Envelopes of Virtual Keyboard Text Input Strategies in Virtual Reality." ISMAR 2019. [PDF](https://www.pokristensson.com/pubs/DudleyEtAlISMAR2019.pdf)
-8. Meta. "How to use neural handwriting on Meta Ray-Ban Display with Meta Neural Band." [도움말](https://www.meta.com/help/ai-glasses/866944989643926/)
 
 ## 기타 참고 사항
 

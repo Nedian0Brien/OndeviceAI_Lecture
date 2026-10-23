@@ -298,7 +298,7 @@ struct TipLabelView: View {
             let single = text.count == 1
             let pressed = state.active
             let radius = (single ? metrics.diameter : max(metrics.diameter, CGFloat(text.count) * 15 * unit + 6 * unit)) / 2
-            let done = model.state.holdMode == true ? state.hold : state.release
+            let done = state.release
             let spread = model.spreads[hand] ?? 0
             let lit = pressed ? Int((done * Double(Self.bars)).rounded())
                 : spread >= 1 ? Int((state.approach * Double(Self.bars)).rounded()) : 0

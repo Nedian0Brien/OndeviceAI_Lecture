@@ -1,32 +1,12 @@
 import SwiftUI
 
-/// 설정 창: 판정 규칙 켜기·끄기와 손 가림. 바꾸면 바로 적용되고 기기에 저장된다(손 가림은 이번 실행에만).
+/// 설정 창: 화면 표시(손 골격·안내, 손 가림). 판정 규칙은 Mac 카메라 앱과 같은 값으로 고정이다.
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
 
     var body: some View {
         @Bindable var model = model
         Form {
-            Section("입력 판정") {
-                Toggle(isOn: $model.settings.hold) {
-                    Text("누르고 유지(0.3초)")
-                    Text("꼬집고 0.3초 머물러야 입력합니다. 끄면 손끝을 뗄 때 입력합니다.")
-                }
-                Toggle(isOn: $model.settings.settle) {
-                    Text("손을 뒤집은 직후 0.3초 무시")
-                    Text("손바닥·손등을 바꾼 직후의 꼬집기를 받지 않습니다. Mac 카메라에서 손을 돌리며 엄지가 검지 옆에 놓이는 것이 입력되던 문제용입니다. 켜면 손을 뒤집고 바로 꼬집은 모음이 씹힐 수 있어 기본으로 꺼 둡니다.")
-                }
-            }
-            Section("Mac 카메라 기록으로 넣은 규칙") {
-                Toggle(isOn: $model.settings.indexSweep) {
-                    Text("오른손 검지 지나감")
-                    Text("다른 손가락을 뗀 직후 0.25초 안의 검지 접촉, 검지가 굽지 않은 접촉을 버립니다. ㄱ이 잘 안 들어가면 꺼 보세요.")
-                }
-                Toggle(isOn: $model.settings.occlusion) {
-                    Text("엄지 가림(기울기)")
-                    Text("손이 소지 쪽으로 25° 넘게 기울면 손바닥 꼬집기를 받지 않습니다. 카메라 한 대에서 엄지가 가려지던 문제용입니다.")
-                }
-            }
             Section("화면") {
                 Toggle(isOn: $model.showGuides) {
                     Text("손 골격·안내 표시")

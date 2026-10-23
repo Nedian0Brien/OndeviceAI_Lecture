@@ -4,8 +4,6 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
 
-import numpy as np
-
 from common.camera import is_window_closed
 from common.gestures import FistHold
 from common.pose import pose_from_image
@@ -29,6 +27,7 @@ class WindowTests(unittest.TestCase):
         cv2 = Mock(error=RuntimeError)
         cv2.getWindowProperty.side_effect = RuntimeError("unsupported backend")
         self.assertFalse(is_window_closed(cv2, "Hand Cheonjiin"))
+
 
 class FistHoldTests(unittest.TestCase):
     def test_hold_fires_once_until_opened(self):
@@ -63,6 +62,7 @@ class FistHoldTests(unittest.TestCase):
         self.assertFalse(gate.update("fist", 0.45))
         self.assertTrue(gate.update("fist", 0.5))
 
+
 class PoseTests(unittest.TestCase):
     def test_open_and_fist_for_both_hands_and_camera_sizes(self):
         for mirrored in (False, True):
@@ -82,11 +82,12 @@ class PoseTests(unittest.TestCase):
         points = [SimpleNamespace(x=.5, y=.5) for _ in range(21)]
         self.assertEqual(pose_from_image(points, 640, 480), "closing")
 
+
 class DrawingTests(unittest.TestCase):
     def test_rounded_rectangle_survives_fractional_near_circle_bounds(self):
         import random
         from PIL import Image, ImageDraw
-        from common.hud import rounded_rectangle
+        from common.canvas import rounded_rectangle
 
         draw = ImageDraw.Draw(Image.new("RGBA", (1280, 720)))
         # Pillow 12.3에서 ValueError가 나던 실제 좌표 (project01 1280x720 손끝 라벨)
@@ -98,20 +99,6 @@ class DrawingTests(unittest.TestCase):
             bounds = (x, y, x + height + rng.uniform(0, 3), y + height)
             rounded_rectangle(draw, bounds, height / 2, fill=(1, 1, 1, 1), outline=(2, 2, 2, 2), width=2)
 
-    def test_blur_under_changes_only_masked_area(self):
-        from PIL import Image, ImageDraw
-        from common.hud import blur_under
-
-        rng = np.random.default_rng(0)
-        picture = Image.fromarray(rng.integers(0, 255, (120, 160, 4), dtype=np.uint8), "RGBA")
-        before = np.asarray(picture).copy()
-        mask = Image.new("L", picture.size)
-        ImageDraw.Draw(mask).rectangle((40, 30, 80, 60), fill=255)
-        after = np.asarray(blur_under(picture, mask))
-        self.assertTrue((after[:30] == before[:30]).all())
-        self.assertTrue((after[:, 90:] == before[:, 90:]).all())
-        self.assertFalse((after[35:55, 45:75] == before[35:55, 45:75]).all())
-        self.assertIs(blur_under(picture, Image.new("L", picture.size)), picture)
 
 class HandednessTests(unittest.TestCase):
     """MediaPipe Tasks는 입력 영상에 보이는 실제 손을 라벨로 낸다. 반전한 영상에서만 라벨을 뒤집는다."""
@@ -137,7 +124,7 @@ class HandednessTests(unittest.TestCase):
         from pathlib import Path
         from common.pose import palm_facing
 
-        data = json.loads((Path(__file__).resolve().with_name("fixtures") / "handedness.json").read_text(encoding="utf-8"))
+        data = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "handedness.json").read_text(encoding="utf-8"))
         for case in data["cases"]:
             with self.subTest(source=case["source"]):
                 self.assertEqual(case["mediapipe_label"], case["true_hand"])
@@ -151,8 +138,85 @@ class HandednessTests(unittest.TestCase):
                                        facing, places=6)
 
 
-if __name__ == "__main__":
-    unittest.main()
+class OrientationTests(unittest.TestCase):
+    def test_dwell_and_hysteresis(self):
+        from common.gestures import Orientation
+        orientation, now, states = Orientation(dwell=0.15), 0.0, []
+        for facing in [0.8] * 6 + [0.2] * 2 + [-0.8] * 7:
+            now += 1 / 30
+            states.append(orientation.update(facing, now))
+        self.assertEqual(states[0], "turning")
+        self.assertEqual(states[6], "palm")  # 0.2: 히스테리시스로 유지
+        self.assertEqual(states[8], "palm")  # 손등이 dwell만큼 이어지기 전에는 앞 방향을 유지
+        self.assertEqual(states[-1], "back")
+
+
+class GeometryTests(unittest.TestCase):
+    @staticmethod
+    def points(index_x, pinky_x):
+        p = [SimpleNamespace(x=0.5, y=0.5, z=0.0) for _ in range(21)]
+        p[0] = SimpleNamespace(x=0.5, y=0.8, z=0.0)
+        p[5] = SimpleNamespace(x=index_x, y=0.6, z=0.0)
+        p[17] = SimpleNamespace(x=pinky_x, y=0.62, z=0.0)
+        return p
+
+    def test_palm_facing_signs(self):
+        from common.pose import palm_facing
+        # 1인칭(반전 없음): 오른손 손바닥이 눈을 향하면 엄지(검지 뿌리)가 보는 사람 기준 오른쪽에 있다.
+        self.assertGreater(palm_facing(self.points(0.56, 0.44), "Right"), 0.25)
+        self.assertLess(palm_facing(self.points(0.44, 0.56), "Right"), -0.25)
+        self.assertGreater(palm_facing(self.points(0.44, 0.56), "Left"), 0.25)
+        self.assertLess(palm_facing(self.points(0.56, 0.44), "Right", mirrored=True), -0.25)
+
+    def test_palm_roll_signs(self):
+        from common.pose import palm_roll
+        # 엄지 쪽(검지 뿌리)이 카메라에 가까우면(z가 작으면) 양수, 소지 쪽이 가까우면 음수.
+        p = self.points(0.56, 0.44)
+        p[5], p[17] = SimpleNamespace(x=0.56, y=0.6, z=-0.12), SimpleNamespace(x=0.44, y=0.6, z=0.0)
+        self.assertAlmostEqual(palm_roll(p), 45.0, places=6)
+        p[5] = SimpleNamespace(x=0.56, y=0.6, z=0.12)
+        self.assertAlmostEqual(palm_roll(p), -45.0, places=6)
+
+    def test_pinch_ratio_measures_to_fingertip_segment(self):
+        from hand_signal import hand_signal, pinch_ratios
+        world = [SimpleNamespace(x=0.0, y=-0.01 * i, z=0.0) for i in range(21)]
+        world[0] = SimpleNamespace(x=0.0, y=0.0, z=0.0)
+        world[9] = SimpleNamespace(x=0.0, y=-0.1, z=0.0)
+        # 엄지 끝이 검지 끝마디(7→8) 선분 가운데에서 1cm 옆: 손끝 점이 아니라 선분까지 잰다.
+        world[4] = SimpleNamespace(x=0.01, y=-0.08, z=0.0)
+        world[8] = SimpleNamespace(x=0.0, y=-0.09, z=0.0)
+        self.assertAlmostEqual(pinch_ratios(world)[0], 0.1, places=6)
+        self.assertGreater(hand_signal("Right", self.points(0.56, 0.44), world).facing, 0)
+
+
+class CameraTests(unittest.TestCase):
+    def test_resolution_and_capture_size(self):
+        import argparse
+        from common.camera import capture_size, parse_resolution, window_size
+        self.assertEqual(parse_resolution("1920X1080"), (1920, 1080))
+        with self.assertRaises(argparse.ArgumentTypeError):
+            parse_resolution("720p")
+        self.assertEqual(capture_size("auto", "linux"), (640, 480))  # Jetson
+        self.assertEqual(capture_size("auto", "darwin"), (1280, 720))
+        self.assertEqual(window_size(640, 480), (960, 720))
+
+    def test_detection_frame_is_capped_and_keeps_aspect(self):
+        import numpy as np
+        from common.hands import detection_frame
+        small = np.zeros((480, 640, 3), np.uint8)
+        self.assertIs(detection_frame(small, 640), small)
+        self.assertEqual(detection_frame(np.zeros((720, 1280, 3), np.uint8), 640).shape, (360, 640, 3))
+
+    def test_assign_hands_by_label_then_position(self):
+        from common.hands import assign_hands
+
+        def hand(x):
+            return [SimpleNamespace(x=x, y=0.5, z=0.0)] * 21
+        hands = assign_hands([("Left", hand(0.8), "w-left", 0.9), ("Right", hand(0.2), "w-right", 0.9)])
+        self.assertEqual((hands["Left"][2], hands["Right"][2]), ("w-left", "w-right"))  # 라벨이 다르면 라벨대로
+        # 두 손 모두 Right로 불리면 화면 왼쪽 손을 왼손으로 정하고, 방향 계산용 원래 라벨은 남긴다.
+        hands = assign_hands([("Right", hand(0.7), "w-right", 0.9), ("Right", hand(0.2), "w-left", 0.6)])
+        self.assertEqual((hands["Left"][2], hands["Left"][0]), ("w-left", "Right"))
 
 
 if __name__ == "__main__":

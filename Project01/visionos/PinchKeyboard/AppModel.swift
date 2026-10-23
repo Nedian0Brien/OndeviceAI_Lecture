@@ -23,16 +23,6 @@ final class AppModel {
     var showGuides = UserDefaults.standard.bool(forKey: "PinchKeyboard.showGuides") {
         didSet { UserDefaults.standard.set(showGuides, forKey: "PinchKeyboard.showGuides") }
     }
-    /// 판정 규칙 켜기·끄기(설정 창). 바꾸면 저장하고 판정 Python에 바로 적용한다.
-    var settings = RuleSettings.load() {
-        didSet {
-            guard settings != oldValue else {
-                return
-            }
-            settings.save()
-            Task { await self.applySettings() }
-        }
-    }
     var layouts: [String: HandLayout] = [:]  // 손 → 이번 프레임 배치
     var frameTime: Double = 0  // 이번 프레임 시각(순환 애니메이션)
     var cycles: [String: CycleMotion] = [:]  // "Left-0" → 순환 애니메이션 상태
@@ -68,18 +58,10 @@ final class AppModel {
             return
         }
         pythonReady = true
-        await applySettings()  // 저장된 판정 규칙 설정
         // 자기 점검: 내장 Python 버전과 고정 데이터 재생 결과(콘솔에도 남겨 Mac에서 확인할 수 있게)
         apply(await engine.call("command", #"{"cmd": "info"}"#))
         print("PinchKeyboard: \(status)")
         status += " · 손 입력 시작을 누르세요"
-    }
-
-    func applySettings() async {
-        guard pythonReady else {
-            return
-        }
-        apply(await engine.call("command", settings.command))
     }
 
     func command(_ name: String) async {

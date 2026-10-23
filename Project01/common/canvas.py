@@ -1,17 +1,15 @@
-"""영상 위에 반투명 HUD를 그리는 도구.
+"""영상 위에 선 HUD를 그리는 도구.
 
-그리는 방식
-- 영상 크기는 그대로 두고, 그 위에 RGBA 오버레이를 합성한다. 별도 패널을 붙이지 않는다.
-- 버튼과 입력창은 "유리" 재질이다. 유리 아래 영상만 살짝 흐리게 하고(material 마스크), 그 위에 중성 톤의
-  반투명 색과 얇은 테두리를 칠한다. visionOS의 유리 재질·원형/캡슐 버튼 모양을 참고한 2D 표현이다.
+- 영상 크기는 그대로 두고, 그 위에 RGBA 오버레이를 그려 합성한다.
+- 가는 선·눈금·호로 정보를 나타내고 강조색은 파랑 한 가지다(ACCENT). 번짐(glow) 층은 흐리게 해서 오버레이 아래 깐다.
 - 모든 크기는 640x480 기준 값에 `ui_scale`(영상 크기 비율)을 곱한다. 그래서 Jetson 640x480과 macOS
   1280x720에서 화면 비율이 같게 보인다.
 
 `HudCanvas` 사용 순서
     canvas = HudCanvas(frame, fonts)          # BGR 프레임과 글꼴 3종(작음·보통·큼)
-    canvas.glass(bounds, circle=True, ...)   # 유리 버튼
+    canvas.ticks(center, radius, ...)         # 선 HUD 도구(각도는 12시 0°에서 시계 방향)
     canvas.write(position, "가", canvas.small, WHITE, "mm")
-    image = canvas.finish()                  # 흐림 + 합성 → BGR 프레임
+    image = canvas.finish()                   # 번짐 + 합성 → BGR 프레임
 
 Pillow·numpy·OpenCV는 함수 안에서 import한다.
 """
@@ -119,26 +117,6 @@ def rounded_rectangle(draw, bounds, radius, **style):
                            **style)
 
 
-def blur_under(picture, mask, pad=8):
-    """mask가 칠해진 영역(경계 상자 + pad)만 1/3 축소 · Gaussian blur · 확대해 picture에 합성한다.
-
-    유리 재질 아래 영상만 흐리게 하는 용도다. 프레임 전체를 처리하던 방식보다 640x480에서 약 2.6배,
-    1920x1080에서 약 2.7배 빠르다(2026-10-22 측정, Jetson 저해상도 시연과 macOS 고해상도 모두 해당).
-    """
-    from PIL import Image, ImageFilter
-
-    box = mask.getbbox()
-    if box is None:
-        return picture
-    x1, y1 = max(0, box[0] - pad), max(0, box[1] - pad)
-    x2, y2 = min(picture.width, box[2] + pad), min(picture.height, box[3] + pad)
-    region = picture.crop((x1, y1, x2, y2))
-    factor = max(1, min(3, region.width, region.height))
-    blurred = region.reduce(factor).filter(ImageFilter.GaussianBlur(2)).resize(region.size, Image.BILINEAR)
-    picture.paste(Image.composite(blurred, region, mask.crop((x1, y1, x2, y2))), (x1, y1))
-    return picture
-
-
 def glow_onto(picture, glow, scale):
     """번짐 층에 그린 영역(경계 상자)만 1/2 축소 · Gaussian blur · 확대해 picture 위에 더한다."""
     from PIL import Image, ImageFilter
@@ -162,7 +140,7 @@ def glow_onto(picture, glow, scale):
 class HudCanvas:
     """BGR 프레임 위에 HUD를 그리는 판.
 
-    picture: 원본 영상(RGBA), overlay: 그 위에 얹을 그림, material: 흐리게 할 유리 영역(L 마스크)
+    picture: 원본 영상(RGBA), overlay: 그 위에 얹을 그림, glow: 흐리게 번지게 할 층
     scale: 640x480 기준 배율, stroke: 선 두께, small·normal·large: 화면 비율에 맞춘 글꼴
     """
 
@@ -178,8 +156,6 @@ class HudCanvas:
         self.picture = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
         self.overlay = Image.new("RGBA", self.picture.size)
         self.draw = ImageDraw.Draw(self.overlay)
-        self.material = Image.new("L", self.picture.size)
-        self.material_draw = ImageDraw.Draw(self.material)
         self.glow = Image.new("RGBA", self.picture.size)  # 번짐 층: 흐리게 해서 오버레이 아래 깐다(finish)
         self.glow_draw = ImageDraw.Draw(self.glow)
 
@@ -190,50 +166,6 @@ class HudCanvas:
         self.overlay.alpha_composite(sprite, (round(position[0] + left), round(position[1] + top)))
         if glow:
             self.glow.alpha_composite(sprite, (round(position[0] + left), round(position[1] + top)))
-
-    def glass(self, bounds, circle=False, hover=False, pressed=False, tint=None, raised=False):
-        """유리 버튼. 원(circle) 또는 캡슐(양 끝이 둥근 사각형).
-
-        상태별 색: 기본은 어두운 반투명, hover는 조금 밝게, pressed는 거의 흰색이다.
-        tint를 주면 그 색을 옅게 깐다(쉬프트 파랑, 마우스 초록 등).
-        raised=True면 원 버튼에 그림자와 윗면 반사선을 더한다(엄지 마디 앱·꼬집기 키보드의 키 모양).
-        캡슐은 항상 아래쪽 그림자가 있다.
-        """
-        x1, y1, x2, y2 = bounds
-        radius = (y2 - y1) / 2
-        shadow = (x1, y1 + 2 * self.scale, x2, y2 + 2 * self.scale)
-        fill = (245, 246, 250, 215) if pressed else ((85, 92, 104, 200) if hover else (31, 33, 40, 140))
-        if tint and not pressed:
-            fill = tint[:3] + (70 if not hover else 120,)
-        edge = (255, 255, 255, 185 if hover or pressed else 65)
-        if circle:
-            if raised:
-                self.draw.ellipse(shadow, fill=(0, 0, 0, 30))
-            self.material_draw.ellipse(bounds, fill=205)
-            self.draw.ellipse(bounds, fill=fill, outline=edge, width=self.stroke)
-            if raised:
-                self.draw.arc(bounds, 205, 325, fill=(255, 255, 255, 125), width=self.stroke)
-        else:
-            rounded_rectangle(self.draw, shadow, radius, fill=(0, 0, 0, 25))
-            rounded_rectangle(self.material_draw, bounds, radius, fill=205)
-            rounded_rectangle(self.draw, bounds, radius, fill=fill, outline=edge, width=self.stroke)
-
-    def ring(self, center, radius, color, fill=None, min_width=1):
-        """어두운 바깥 테두리를 두른 원형 표시(엄지 끝·커서). 밝은 영상 위에서도 보이게 한다.
-
-        min_width: 안쪽 원 선의 최소 두께. 손끝 꼬집기 HUD의 커서는 2, 나머지는 1이다(기존 모양 유지).
-        """
-        x, y = center
-        r, s = radius, self.scale
-        self.draw.ellipse((x - r - s, y - r - s, x + r + s, y + r + s), outline=(20, 23, 29, 190),
-                          width=max(2, round(3 * s)))
-        self.draw.ellipse((x - r, y - r, x + r, y + r), outline=color, width=max(min_width, round(2 * s)), fill=fill)
-
-    def progress_arc(self, center, radius, progress, color, width):
-        """12시 방향에서 시계 방향으로 progress(0~1)만큼 호를 그린다."""
-        x, y = center
-        self.draw.arc((x - radius, y - radius, x + radius, y + radius), -90, -90 + 360 * progress, fill=color,
-                      width=width)
 
     # --- 선 HUD 도구: 각도는 12시 방향 0°에서 시계 방향 ---------------------------------
     @staticmethod
@@ -258,26 +190,20 @@ class HudCanvas:
             self.glow_draw.ellipse(box, outline=color, width=line + 2)
 
     def ticks(self, center, radius, length, count, color, lit=0, lit_color=None, width=None, start=0.0, end=360.0,
-              glow=False, halo=False, lit_length=None, lit_width=None):
+              glow=False):
         """반지름 radius에서 바깥으로 length만큼의 짧은 눈금 count개(분절 링). 12시부터 시계 방향으로 lit개는
-        lit_color(켜짐), 나머지는 color. 진행 표시는 연속 호 대신 켜진 눈금 수로 나타낸다.
-        halo: 눈금 아래 어두운 테두리(작은 눈금에 깔면 굵고 거칠어 보여 기본은 끈다).
-        lit_length·lit_width: 켜진 눈금의 길이·두께(꺼진 눈금과 구분되게 길고 두껍게 할 때)."""
+        lit_color(켜짐), 나머지는 color. 진행 표시는 연속 호 대신 켜진 눈금 수로 나타낸다."""
         line = self._line_width(width)
         span = end - start
         step = span / count if span >= 360 else span / max(1, count - 1)
         for k in range(count):
             angle = start + k * step
             on = k < lit
-            size = (lit_length or length) if on else length
-            thick = self._line_width(lit_width) if on and lit_width is not None else line
-            a, b = self.polar(center, radius, angle), self.polar(center, radius + size, angle)
+            a, b = self.polar(center, radius, angle), self.polar(center, radius + length, angle)
             ink = (lit_color or color) if on else color
-            if halo:
-                self.draw.line((a, b), fill=HALO, width=thick + 2)
-            self.draw.line((a, b), fill=ink, width=thick)
+            self.draw.line((a, b), fill=ink, width=line)
             if glow and on:
-                self.glow_draw.line((a, b), fill=ink, width=thick + 2)
+                self.glow_draw.line((a, b), fill=ink, width=line + 2)
 
     def dashed_circle(self, center, radius, color, dashes=32, duty=0.5, width=None):
         """파선 원(보조 기준선)."""
@@ -334,12 +260,11 @@ class HudCanvas:
                           outline=ACCENT if active else LINE_DIM, width=self._line_width(None))
 
     def finish(self):
-        """유리 아래 흐림 → 번짐 → 오버레이 합성 → BGR 프레임."""
+        """번짐 → 오버레이 합성 → BGR 프레임."""
         import cv2
         import numpy as np
         from PIL import Image
 
-        picture = blur_under(self.picture, self.material)
-        picture = glow_onto(picture, self.glow, self.scale)
+        picture = glow_onto(self.picture, self.glow, self.scale)
         picture = Image.alpha_composite(picture, self.overlay).convert("RGB")
         return cv2.cvtColor(np.asarray(picture), cv2.COLOR_RGB2BGR)

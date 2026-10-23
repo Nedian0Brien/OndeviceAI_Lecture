@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Mac 앱 HUD(Project01/project01.py, common/hud.py)와 같은 색·모양.
+/// Mac 앱 HUD(Project01/hud.py, common/canvas.py)와 같은 색·모양.
 /// 선 HUD(2026-10-23): 가는 선과 눈금으로 정보를 나타내고 강조는 채도 낮은 파랑 한 가지다.
 enum HUD {
     static func rgba(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 255) -> Color {
@@ -14,7 +14,7 @@ enum HUD {
     static let deleteRed = rgba(255, 128, 116)
     static let promptYellow = rgba(255, 214, 102)
 
-    // common/hud.py 선 HUD 색과 같은 값
+    // common/canvas.py 선 HUD 색과 같은 값
     static let line = rgba(236, 240, 248, 225)  // 기본 선
     static let lineDim = rgba(236, 240, 248, 95)  // 보조 선·꺼진 눈금
     static let accent = rgba(158, 197, 255)  // 강조 선·켜진 눈금(#9EC5FF)
@@ -23,7 +23,7 @@ enum HUD {
     static let backdrop = rgba(8, 10, 16, 120)  // 밝은 배경 위에서도 선·글자가 보이게 까는 어두운 면
 }
 
-/// 각도는 12시 0°에서 시계 방향(화면 좌표, y 아래). common.hud.HudCanvas.polar와 같다.
+/// 각도는 12시 0°에서 시계 방향(화면 좌표, y 아래). common.canvas.HudCanvas.polar와 같다.
 enum Polar {
     static func point(_ center: CGPoint, _ radius: CGFloat, _ degrees: Double) -> CGPoint {
         let a = degrees * .pi / 180
@@ -36,7 +36,7 @@ enum Polar {
     }
 }
 
-/// 선 HUD 그리기 도구(common.hud.HudCanvas의 ticks·arc·band·dashed_circle·pointer와 같은 규칙).
+/// 선 HUD 그리기 도구(common.canvas.HudCanvas의 ticks·arc·band·dashed_circle·pointer와 같은 규칙).
 extension GraphicsContext {
     /// 반지름 radius에서 바깥으로 length만큼의 짧은 눈금 count개. 12시(start)부터 시계 방향으로 lit개는 litColor(켜짐).
     func ticks(center: CGPoint, radius: CGFloat, length: CGFloat, count: Int, color: Color, lit: Int = 0,
@@ -88,7 +88,7 @@ extension GraphicsContext {
     }
 }
 
-/// 가는 원 + 안쪽 면(common.hud.HudCanvas.hairline_circle).
+/// 가는 원 + 안쪽 면(common.canvas.HudCanvas.hairline_circle).
 struct HairlineCircle: View {
     var edge: Color
     var fill: Color = HUD.backdrop

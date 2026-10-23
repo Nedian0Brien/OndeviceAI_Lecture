@@ -1,6 +1,6 @@
 import Foundation
 
-/// 내장 Python(Project01/pinch_vision.py의 Session)을 부르는 창구. Python 호출은 이 직렬 큐 하나에서만 한다.
+/// 내장 Python(Project01/visionos/pinch_vision.py의 Session)을 부르는 창구. Python 호출은 이 직렬 큐 하나에서만 한다.
 final class PythonEngine: @unchecked Sendable {
     private let queue = DispatchQueue(label: "pinch-keyboard.python")
     private var started = false
@@ -48,7 +48,6 @@ struct PinchState: Decodable {
         var active: Bool
         var approach: Double
         var release: Double
-        var hold: Double
     }
 
     struct Hand: Decodable {
@@ -93,9 +92,7 @@ struct PinchState: Decodable {
     var pendingPunct: Bool?
     var group: [String]?
     var groupIndex: Int?
-    var holdMode: Bool?
     var hands: [String: Hand]?
-    var settings: RuleSettings?
     var log: String?
     var notice: String?
     var error: String?
@@ -107,45 +104,5 @@ struct PinchState: Decodable {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try? decoder.decode(PinchState.self, from: data)
-    }
-}
-
-/// 판정 규칙 켜기·끄기(설정 창). 판정 Python의 pinch_vision.Session.apply_settings로 넘기고, 기기에 저장한다.
-struct RuleSettings: Codable, Equatable {
-    var hold = false  // 꼬집고 0.3초 머물러야 입력(누르고 유지)
-    /// 손을 뒤집은 직후 0.3초는 꼬집기를 받지 않음. Vision Pro에서는 기본으로 끈다: 뒤집고 바로 손등 검지(모음)를 꼬집으면
-    /// 쉬는 동안 기준값이 사라져 접촉을 알아보지 못했다(2026-10-23 단어 기록: 손등 검지 접촉 23번 중 7번이 뒤집고
-    /// 0.17~0.33초 안에 시작해 씹힘). 끄고 재생하면 23번 모두 들어가고, 뒤집는 동작에서 나온 오입력은 보이지 않았다.
-    /// Mac(카메라)은 뒤집는 동안 엄지가 검지 옆을 지나가는 오입력 때문에 0.3초를 그대로 쓴다.
-    var settle = false
-    var indexSweep = true  // 오른손 검지 지나감 규칙(엄지가 검지를 스치거나 돌아오며 지나간 접촉을 버림)
-    var occlusion = true  // 엄지 가림 규칙(소지 쪽으로 25° 넘게 기울면 손바닥 꼬집기를 받지 않음)
-    var revision: Int? = Self.revisionNow  // 저장 형식 판(옛 저장값을 새 기본값으로 옮길 때 쓴다)
-
-    private static let key = "PinchKeyboard.RuleSettings"
-    private static let revisionNow = 2  // 2: settle 기본값을 끔(2026-10-24)
-
-    static func load() -> RuleSettings {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              var settings = try? JSONDecoder().decode(RuleSettings.self, from: data) else {
-            return RuleSettings()
-        }
-        if (settings.revision ?? 1) < revisionNow {  // 옛 저장값: settle만 새 기본값(끔)으로, 나머지는 그대로
-            settings.settle = false
-            settings.revision = revisionNow
-            settings.save()
-        }
-        return settings
-    }
-
-    func save() {
-        if let data = try? JSONEncoder().encode(self) {
-            UserDefaults.standard.set(data, forKey: Self.key)
-        }
-    }
-
-    /// pinch_vision 설정 명령(JSON).
-    var command: String {
-        #"{"cmd": "settings", "values": {"hold": \#(hold), "settle": \#(settle), "index_sweep": \#(indexSweep), "occlusion": \#(occlusion)}}"#
     }
 }

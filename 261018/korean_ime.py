@@ -5,9 +5,11 @@
   4 ㄱㅋㄲ  5 ㄴㄹ  6 ㄷㅌㄸ
   7 ㅂㅍㅃ  8 ㅅㅎㅆ  9 ㅈㅊㅉ
   0 ㅇㅁ   SPACE 공백   COMMIT 조합 경계(공백 없음)   ENTER 줄바꿈   BACK 지움
+  N ㄴ  L ㄹ   (꼬집기 자판 pinch_typer가 ㄴㄹ을 두 손가락으로 나눠 쓴다)
 
 - 모음은 ㅣ·ㆍ·ㅡ 획을 이어 붙여 만든다(ㅣ+ㆍ = ㅏ, ㆍ+ㅡ = ㅗ …). 아래아 ㆍ·ㆍㆍ는 조합 중에만 보인다.
 - 같은 자음 키를 cycle_seconds 안에 다시 누르면 그 그룹 안에서 다음 자음으로 바뀐다(ㄱ → ㅋ → ㄲ).
+  글자가 하나인 키(N, L)는 순환하지 않고 같은 자음을 하나 더 넣는다.
 - 자모 토큰 목록을 유지하고, 매번 `compose`로 유니코드 한글 문자열을 만든다. 받침은 다음 모음이 오면
   다음 글자의 초성으로 옮겨 간다.
 - 지움(backspace)은 마지막 키 입력 한 번을 되돌린다(완성 글자를 통째로 지우지 않는다).
@@ -23,6 +25,7 @@ from typing import Optional
 CONSONANTS = {
     "4": "ㄱㅋㄲ", "5": "ㄴㄹ", "6": "ㄷㅌㄸ",
     "7": "ㅂㅍㅃ", "8": "ㅅㅎㅆ", "9": "ㅈㅊㅉ", "0": "ㅇㅁ",
+    "N": "ㄴ", "L": "ㄹ",  # 꼬집기 자판(2026-10-23): ㄴ·ㄹ을 손가락 하나씩
 }
 VOWEL_KEYS = {"1": "i", "2": ".", "3": "-"}
 VOWELS = {
@@ -139,7 +142,7 @@ class CheonjiinIME:
         """문장을 바꾸지 않고 다음 입력에서 선택될 자모 한 개를 알려준다."""
         if key in CONSONANTS:
             group = CONSONANTS[key]
-            if (self.tokens and self.tokens[-1].kind == "C" and self.last_key == key
+            if (len(group) > 1 and self.tokens and self.tokens[-1].kind == "C" and self.last_key == key
                     and 0 <= now - self.last_time <= self.cycle_seconds):
                 return group[(group.index(self.tokens[-1].value) + 1) % len(group)]
             return group[0]
@@ -148,7 +151,7 @@ class CheonjiinIME:
     def prepare_key(self, key, now):
         label = self.preview_label(key, now)
         target = None
-        if (key in CONSONANTS and self.tokens and self.tokens[-1].kind == "C"
+        if (key in CONSONANTS and len(CONSONANTS[key]) > 1 and self.tokens and self.tokens[-1].kind == "C"
                 and self.last_key == key and 0 <= now - self.last_time <= self.cycle_seconds):
             target = self.tokens[-1]
         return PreparedKey(key, label, target, target.value if target is not None else "")

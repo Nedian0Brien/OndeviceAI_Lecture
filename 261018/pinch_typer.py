@@ -3,22 +3,25 @@
 카메라·MediaPipe와 분리되어 있다. 손마다 HandSignal(손가락별 꼬집기 비율, 굽힘, 자세, 손 방향)을 받아
 한글 입력(CheonjiinIME)을 만든다. visionOS(ARKit)로 옮길 때도 같은 신호만 만들면 된다.
 
-자판: 손 방향(손바닥/손등이 카메라를 향함)마다 다른 키가 놓인다(2026-10-23 모음 한 버튼, 쉬프트 없음).
+자판: 손 방향(손바닥/손등이 카메라를 향함)마다 다른 키가 놓인다(2026-10-23 손등 모음, 손바닥은 모두 자음).
                   검지      중지      약지      소지
-  왼손 손바닥     ㅂㅍㅃ    모음      ㅅㅎㅆ    ㅈㅊㅉ
-  오른손 손바닥   ㄱㅋㄲ    ㄴㄹ      ㄷㅌㄸ    ㅇㅁ
-  왼손 손등       지움      공백      확정      . , ? ! 줄바꿈   (편집 키)
+  왼손 손바닥     ㅂㅍㅃ    ㄹ        ㅅㅎㅆ    ㅈㅊㅉ
+  오른손 손바닥   ㄱㅋㄲ    ㄴ        ㄷㅌㄸ    ㅇㅁ
+  왼손 손등       모음      공백      확정      . , ? ! 줄바꿈
   오른손 손등     확정/공백 -         -         -     (후보가 있으면 확정, 없으면 공백. 손등은 손가락이 가려 검지만)
 
-- 모음(왼손 중지): 꼬집고 그대로 떼면 ㆍ, 꼬집은 채 가로로 끌면 ㅡ, 세로로 끌면 ㅣ(천지인 획). DRAG_MIN 설명.
+- 모음(왼손 손등 검지): 꼬집고 그대로 떼면 ㆍ, 꼬집은 채 가로로 끌면 ㅡ, 세로로 끌면 ㅣ(천지인 획). DRAG_MIN 설명.
 - 자음 그룹·문장부호는 같은 손·손가락을 다시 꼬집으면 그룹 안에서 순환하고, 다른 키를 꼬집으면 앞 후보가 확정된다
-  (C 규칙). 같은 손가락 자음을 이어 쓸 때(안녕의 ㄴ→ㄴ)는 오른손 손등 검지로 확정한다.
+  (C 규칙). 같은 손가락 자음을 이어 쓸 때(까까의 ㄲ→ㄲ)는 오른손 손등 검지로 확정한다.
+  ㄴ·ㄹ은 글자가 하나라 순환하지 않고 바로 들어간다(안녕의 ㄴ→ㄴ은 이어 꼬집으면 된다).
 - 주먹(양손): 지움. 마지막 자모 하나를 통째로 지우고(감 → 가 → ㄱ), 쥐고 있으면 FIST_REPEAT초마다 계속 지운다.
+  지움 키는 없다(2026-10-23 사용자 결정: 손등 검지를 모음에 쓰며 뺐다).
 - 마우스 모드(오른손 손등 커서)는 2026-10-23 뺐다.
 - 오른손 손등 아랫줄 자판(손등에서 네 손가락 꼬집기)을 시험했으나, 손등이 카메라를 향하면 꼬집는 손끝이 카메라
   반대쪽으로 굽고 엄지가 가려져 꼬집기 비율이 0.41~0.51에 머물렀다(2026-10-23 스냅숏). 그래서 오른손 손등에서는 검지만 받는다.
 - 예전 자판(모음 세 손가락, 오른손 손등 검지 쉬프트 뒤의 ㅂ·ㅅ·ㅈ 그룹)은 2026-10-23 바꿨다(사용자: 모음은 한 버튼으로,
-  자음 절반이 쉬프트 뒤에 있는 문제 해결).
+  자음 절반이 쉬프트 뒤에 있는 문제 해결). 같은 날 모음 버튼을 왼손 손바닥 중지에서 손등 검지로 옮기고, 비운 중지에
+  ㄴㄹ 그룹을 나눈 ㄹ을 두었다(사용자: 왼손 손바닥은 모두 자음).
 
 구성
   landmark → 신호   pinch_ratios, hand_signal → HandSignal
@@ -43,11 +46,11 @@ from common.pose import CURL_ANGLE, finger_angles, finger_flex, palm_facing, pal
 HANDS = ("Left", "Right")
 FACES = ("palm", "back")  # 손바닥 / 손등이 카메라를 향함
 # 손가락(검지·중지·약지·소지) 순서의 키. 키 이름은 korean_ime의 천지인 키 번호(자음 그룹 4~0, 모음 획 1~3)와 편집 키다.
-LEFT_KEYS = ("7", "VOWEL", "8", "9")  # 왼손 손바닥: ㅂㅍㅃ · 모음(꼬집기 ㆍ / 가로 끌기 ㅡ / 세로 끌기 ㅣ) · ㅅㅎㅆ · ㅈㅊㅉ
-RIGHT_KEYS = ("4", "5", "6", "0")  # 오른손 손바닥: ㄱㅋㄲ · ㄴㄹ · ㄷㅌㄸ · ㅇㅁ
-# 왼손 손등: 편집 키(주먹 지우기가 연속으로 지우기에 느려서 추가). 여러 번 지울 때는 왼손을 뒤집고 검지를 반복해 꼬집는다.
-# 소지는 문장부호 그룹(. , ? ! 줄바꿈)이고 같은 손가락을 다시 꼬집으면 순환한다.
-EDIT_KEYS = ("BACK", "SPACE", "COMMIT", "PUNCT")
+LEFT_KEYS = ("7", "L", "8", "9")  # 왼손 손바닥: ㅂㅍㅃ · ㄹ · ㅅㅎㅆ · ㅈㅊㅉ
+RIGHT_KEYS = ("4", "N", "6", "0")  # 오른손 손바닥: ㄱㅋㄲ · ㄴ · ㄷㅌㄸ · ㅇㅁ
+# 왼손 손등: 모음(꼬집기 ㆍ / 가로 끌기 ㅡ / 세로 끌기 ㅣ) · 공백 · 확정 · 문장부호 그룹(. , ? ! 줄바꿈, 다시 꼬집으면 순환).
+# 지움 키("BACK")는 자판에서 뺐다(주먹으로 지운다). edit_key는 키보드 시험·기록 재생을 위해 그대로 받는다.
+EDIT_KEYS = ("VOWEL", "SPACE", "COMMIT", "PUNCT")
 RIGHT_BACK_KEYS = ("COMMIT_SPACE", None, None, None)  # 오른손 손등 검지: 후보가 있으면 확정, 없으면 공백
 KEYS = {("Left", "palm"): LEFT_KEYS, ("Left", "back"): EDIT_KEYS,
         ("Right", "palm"): RIGHT_KEYS, ("Right", "back"): RIGHT_BACK_KEYS}
@@ -168,8 +171,8 @@ def group_of(key):
 
 
 def is_group_key(key):
-    """같은 손가락을 다시 꼬집으면 순환하는 키(자음 그룹·문장부호)인가."""
-    return key == "PUNCT" or key in CONSONANTS
+    """같은 손가락을 다시 꼬집으면 순환하는 키(글자가 둘 이상인 자음 그룹·문장부호)인가. ㄴ·ㄹ 한 글자 키는 아니다."""
+    return key == "PUNCT" or len(CONSONANTS.get(key, "")) > 1
 
 
 def key_label(key):
@@ -625,7 +628,11 @@ class PinchTyper:
             self.pending = None
             self.ime.press(stroke, now)
             return [("input", VOWEL_LABELS[stroke])]
-        if not is_group_key(key):  # 왼손 손등 편집 키(지움·공백·확정)
+        if key in CONSONANTS and not is_group_key(key):  # ㄴ·ㄹ: 순환하지 않으니 후보로 두지 않고 바로 넣는다
+            self.pending = None
+            self._put(key, CONSONANTS[key], now)
+            return [("input", CONSONANTS[key])]
+        if not is_group_key(key):  # 왼손 손등 편집 키(공백·확정)
             return self.edit_key(key, now)
         pending = self.pending
         if pending is not None and (pending.hand, pending.finger, pending.face) == (hand, finger, face):

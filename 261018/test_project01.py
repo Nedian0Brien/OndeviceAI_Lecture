@@ -61,11 +61,21 @@ class IMETests(unittest.TestCase):
 
     def test_consonant_cycles(self):
         for key, group in CONSONANTS.items():
+            if len(group) == 1:
+                continue
             with self.subTest(key=key):
                 self.setUp()
                 for char in group + group[0]:
                     self.type(key)
                     self.assertEqual(self.ime.text, char)
+
+    def test_single_consonant_key_does_not_cycle(self):
+        # 글자가 하나인 키(꼬집기 자판의 ㄴ·ㄹ)는 다시 눌러도 같은 자음을 하나 더 넣는다(안녕의 ㄴ→ㄴ).
+        self.type("N" "N")
+        self.assertEqual(self.ime.text, "ㄴㄴ")
+        self.setUp()
+        self.type("0" "1" "2" "N" "N" "2" "2" "1" "0")
+        self.assertEqual(self.ime.text, "안녕")
 
     def test_timeout_separates_same_consonant(self):
         self.type("5")

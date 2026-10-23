@@ -1,22 +1,22 @@
 {
-  "version": 5,
-  "description": "pinch_typer 이벤트 수준 고정 데이터. tap=[손, 손가락(0 검지~3 소지), 방향(생략 = palm, back = 손등), 끌기(모음 버튼: 생략 = 그대로 ㆍ, h = 가로 ㅡ, v = 세로 ㅣ)], fist=[손]. 2026-10-23 모음 한 버튼·쉬프트 없는 자판.",
+  "version": 6,
+  "description": "pinch_typer 이벤트 수준 고정 데이터. tap=[손, 손가락(0 검지~3 소지), 방향(생략 = palm, back = 손등), 끌기(모음 버튼: 생략 = 그대로 ㆍ, h = 가로 ㅡ, v = 세로 ㅣ)], fist=[손]. 2026-10-23 손등 모음·손바닥 모두 자음.",
   "layout": {
     "Left palm": [
       "ㅂㅍㅃ",
-      "모음(꼬집기 ㆍ / 가로 끌기 ㅡ / 세로 끌기 ㅣ)",
+      "ㄹ",
       "ㅅㅎㅆ",
       "ㅈㅊㅉ"
     ],
     "Left back": [
-      "지움",
+      "모음(꼬집기 ㆍ / 가로 끌기 ㅡ / 세로 끌기 ㅣ)",
       "공백",
       "확정",
       ". , ? ! 줄바꿈"
     ],
     "Right palm": [
       "ㄱㅋㄲ",
-      "ㄴㄹ",
+      "ㄴ",
       "ㄷㅌㄸ",
       "ㅇㅁ"
     ],
@@ -35,7 +35,7 @@
   },
   "cases": [
     {
-      "name": "안녕하세요 (같은 손가락 자음 연속은 오른손 손등 검지로 확정, ㅎ·ㅅ은 왼손 약지)",
+      "name": "안녕하세요 (ㄴ→ㄴ은 확정 없이 이어 꼬집기, ㅎ·ㅅ은 왼손 약지)",
       "text": "안녕하세요",
       "steps": [
         [
@@ -46,23 +46,13 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
-        ],
-        [
-          "tap",
-          "Right",
-          1
-        ],
-        [
-          "tap",
-          "Right",
           0,
           "back"
         ],
@@ -73,19 +63,26 @@
         ],
         [
           "tap",
-          "Left",
+          "Right",
           1
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back"
+        ],
+        [
+          "tap",
+          "Left",
+          0,
+          "back",
           "v"
         ],
         [
@@ -106,14 +103,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -123,20 +121,21 @@
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
@@ -147,24 +146,26 @@
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "h"
         ]
       ]
     },
     {
-      "name": "한글 (다른 키를 꼬집으면 자동 확정)",
+      "name": "한글 (다른 키를 꼬집으면 자동 확정, ㄹ은 왼손 중지)",
       "text": "한글",
       "steps": [
         [
@@ -180,14 +181,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -202,18 +204,13 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "h"
         ],
         [
           "tap",
-          "Right",
-          1
-        ],
-        [
-          "tap",
-          "Right",
+          "Left",
           1
         ]
       ]
@@ -235,14 +232,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -257,14 +255,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "h"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -291,36 +290,33 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
-          "Right",
-          1
-        ],
-        [
-          "tap",
-          "Right",
+          "Left",
           1
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -356,14 +352,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -378,8 +375,8 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ]
       ]
@@ -396,8 +393,8 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
@@ -429,8 +426,8 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "h"
         ],
         [
@@ -446,8 +443,8 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
@@ -458,14 +455,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ]
       ]
     },
@@ -481,14 +479,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -509,14 +508,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -526,14 +526,14 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ]
       ]
     },
     {
-      "name": "바사자 (왼손 자음은 손바닥에서 바로, 쉬프트 없음)",
+      "name": "바사자 (왼손 자음은 손바닥에서 바로)",
       "text": "바사자",
       "steps": [
         [
@@ -544,14 +544,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -561,14 +562,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -578,19 +580,84 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ]
       ]
     },
     {
-      "name": "모음 버튼: 세로 끌기 ㅣ · 가로 끌기 ㅡ · 그대로+세로 ㅓ",
+      "name": "빨래 (ㄹ→ㄹ도 이어 꼬집기)",
+      "text": "빨래",
+      "steps": [
+        [
+          "tap",
+          "Left",
+          0
+        ],
+        [
+          "tap",
+          "Left",
+          0
+        ],
+        [
+          "tap",
+          "Left",
+          0
+        ],
+        [
+          "tap",
+          "Left",
+          0,
+          "back",
+          "v"
+        ],
+        [
+          "tap",
+          "Left",
+          0,
+          "back"
+        ],
+        [
+          "tap",
+          "Left",
+          1
+        ],
+        [
+          "tap",
+          "Left",
+          1
+        ],
+        [
+          "tap",
+          "Left",
+          0,
+          "back",
+          "v"
+        ],
+        [
+          "tap",
+          "Left",
+          0,
+          "back"
+        ],
+        [
+          "tap",
+          "Left",
+          0,
+          "back",
+          "v"
+        ]
+      ]
+    },
+    {
+      "name": "모음 버튼(왼손 손등 검지): 세로 끌기 ㅣ · 가로 끌기 ㅡ · 그대로+세로 ㅓ",
       "text": "이으어",
       "steps": [
         [
@@ -601,8 +668,8 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
@@ -613,8 +680,8 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "h"
         ],
         [
@@ -625,13 +692,14 @@
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ]
       ]
@@ -673,14 +741,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -690,14 +759,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "fist",
@@ -717,14 +787,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -754,23 +825,13 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
-        ],
-        [
-          "tap",
-          "Right",
-          1
-        ],
-        [
-          "tap",
-          "Right",
           0,
           "back"
         ],
@@ -781,19 +842,26 @@
         ],
         [
           "tap",
-          "Left",
+          "Right",
           1
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back"
+        ],
+        [
+          "tap",
+          "Left",
+          0,
+          "back",
           "v"
         ],
         [
@@ -819,14 +887,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -866,14 +935,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ]
       ]
     },
@@ -889,14 +959,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -936,14 +1007,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ]
       ]
     },
@@ -977,14 +1049,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ]
       ]
     },
@@ -1000,14 +1073,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -1023,14 +1097,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ]
       ]
     },
@@ -1046,20 +1121,21 @@
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ]
       ]
@@ -1076,31 +1152,33 @@
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "h"
         ],
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ]
       ]
     },
     {
-      "name": "확정을 더 넣어도 받침 이동은 그대로",
+      "name": "확정을 더 넣어도 받침 이동은 그대로 (왼손 손등 약지 확정)",
       "text": "가나",
       "steps": [
         [
@@ -1111,42 +1189,44 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
-        ],
-        [
-          "tap",
-          "Right",
-          1
-        ],
-        [
-          "tap",
-          "Right",
           0,
           "back"
         ],
         [
           "tap",
+          "Right",
+          1
+        ],
+        [
+          "tap",
           "Left",
-          1,
-          "palm",
+          2,
+          "back"
+        ],
+        [
+          "tap",
+          "Left",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ]
       ]
     },
     {
-      "name": "왼손 손등 편집 키 (지움 · 줄바꿈 · 확정 · 공백)",
+      "name": "왼손 손등 키 (줄바꿈 · 확정 · 공백, 지움은 주먹)",
       "text": "간\nㄴㄴ ",
       "steps": [
         [
@@ -1157,14 +1237,15 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
         ],
         [
           "tap",
           "Left",
-          1
+          0,
+          "back"
         ],
         [
           "tap",
@@ -1174,20 +1255,19 @@
         [
           "tap",
           "Left",
-          1,
-          "palm",
+          0,
+          "back",
           "v"
-        ],
-        [
-          "tap",
-          "Left",
-          1
         ],
         [
           "tap",
           "Left",
           0,
           "back"
+        ],
+        [
+          "fist",
+          "Left"
         ],
         [
           "tap",

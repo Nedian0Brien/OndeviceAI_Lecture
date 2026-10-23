@@ -11,7 +11,7 @@ pinch_cheonjiin.py --collect가 쓴다. 화면에 "왼손 약지"처럼 꼬집�
           왼손 reps바퀴 다음 오른손 reps바퀴. 한 손에 집중할 수 있고, 손가락을 옮겨 가는 실제 입력 동작과 비슷하다.
   left / right: 그 손 손바닥만 검지 → 소지 reps바퀴. 한 손을 특정 자세(예: 카메라가 비스듬히 보는 자세)로
           모아 기록할 때 쓴다(2026-10-23, 가려진 중지 꼬집기 조사).
-  edit:   왼손 손등 편집 키(지움·공백·확정·줄바꿈). 왼손 손등으로 검지 → 소지 reps바퀴.
+  edit:   왼손 손등 키(모음·공백·확정·문장부호). 왼손 손등으로 검지 → 소지 reps바퀴.
   words:  단어를 하나씩 안내하고 평소처럼 친다(WordCollector). 손가락을 이어서 옮길 때 생기는 오입력(엄지가 검지를
           지나감 등)은 손가락 하나씩 쉬어 가며 안내하면 나타나지 않아서 만들었다(2026-10-23).
 
@@ -138,7 +138,7 @@ WORDS = (
     "좋은 아침", "맛있어요", "행복", "꽃", "뜨거워", "휴대폰", "회사", "귀여워", "예뻐", "얘기",
 )
 VOWEL_STROKES = {medial: strokes for strokes, medial in VOWELS.items() if medial in MEDIALS}
-VOWEL = ("Left", 1, "palm")  # 왼손 중지: 모음 버튼
+VOWEL = ("Left", 0, "back")  # 왼손 손등 검지: 모음 버튼
 STROKE_DRAGS = {".": None, "-": "h", "i": "v"}  # 천지인 획 → 끌기: ㆍ 그대로, ㅡ 가로, ㅣ 세로
 COMMIT = ("Right", 0, "back")  # 오른손 손등 검지: 후보가 있으면 확정, 없으면 공백
 # 자음 그룹 키 → 손바닥 자리(손, 손가락)
@@ -160,9 +160,9 @@ def jamo_of(syllable):
 def word_steps(word):
     """단어를 치는 기대 단계 [["tap", 손, 손가락, 방향, 끌기]](pinch_typer.replay 형식). 입력기로 같은 글자가 나오는지 검증한다.
 
-    - 모음: 왼손 중지 모음 버튼을 천지인 획 순서로(ㆍ 그대로, ㅡ 가로 끌기, ㅣ 세로 끌기).
-    - 자음: 그룹 손가락을 그룹 안 순서만큼(ㅋ = 오른손 검지 2번, ㅎ = 왼손 약지 2번).
-    - 같은 손·손가락 자음이 이어지면(안녕의 ㄴ→ㄴ) 사이에 오른손 손등 검지로 확정한다.
+    - 모음: 왼손 손등 검지 모음 버튼을 천지인 획 순서로(ㆍ 그대로, ㅡ 가로 끌기, ㅣ 세로 끌기).
+    - 자음: 그룹 손가락을 그룹 안 순서만큼(ㅋ = 오른손 검지 2번, ㅎ = 왼손 약지 2번). ㄴ·ㄹ은 한 번.
+    - 같은 손·손가락 그룹 자음이 후보로 남아 이어지면(까까의 ㄲ→ㄲ) 사이에 오른손 손등 검지로 확정한다.
     - 공백: 후보가 있으면 손등 검지 한 번(확정) 더, 그다음 손등 검지(공백).
     """
     typer, steps, now = PinchTyper(), [], 0.0
@@ -184,7 +184,7 @@ def word_steps(word):
                 for stroke in VOWEL_STROKES[jamo]:
                     press(VOWEL, STROKE_DRAGS[stroke])
                 continue
-            group = next(key for key, letters in CONSONANTS.items() if jamo in letters)
+            group = next(key for key in GROUP_PLACES if jamo in CONSONANTS[key])  # 자판에 있는 키(ㄹ = L)
             hand, finger = GROUP_PLACES[group]
             pending = typer.pending
             if pending is not None and (pending.hand, pending.finger, pending.face) == (hand, finger, "palm"):

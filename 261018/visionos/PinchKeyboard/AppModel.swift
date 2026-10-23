@@ -195,7 +195,7 @@ final class AppModel {
         var caption = hand == "Left" ? "왼손" : "오른손"
         switch info.face {
         case "back":
-            caption += " · " + (hand == "Left" ? "손등 편집" : "손등 확정/공백")
+            caption += " · " + (hand == "Left" ? "손등 모음·편집" : "손등 확정/공백")
         case "palm":
             caption += " · 손바닥"
         case "turning":

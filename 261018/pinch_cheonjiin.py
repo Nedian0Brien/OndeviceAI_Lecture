@@ -38,14 +38,14 @@ WINDOW = "Pinch Cheonjiin"
 FIXTURES = Path(__file__).resolve().with_name("fixtures") / "pinch-typer-keys.json"
 DATA = Path(__file__).resolve().with_name("data")
 ORIENTATION_NAMES = {"palm": "손바닥", "back": "손등", "turning": "회전 중", None: ""}
-FACE_CAPTIONS = {"Left": "손등 편집", "Right": "손등 확정/공백"}  # 손등일 때 손 이름 옆 표시
-# 키보드 시험용: 1~4 = 왼손 검지~소지(2 = 모음 ㆍ), - = 모음 가로 끌기(ㅡ), / = 모음 세로 끌기(ㅣ),
-# 7 8 9 0 = 오른손 검지~소지, Shift를 누르면 손등(US 자판의 !@#$ / &*()), Space = 왼손 주먹, Backspace = 오른손 주먹
+FACE_CAPTIONS = {"Left": "손등 모음·편집", "Right": "손등 확정/공백"}  # 손등일 때 손 이름 옆 표시
+# 키보드 시험용: 1~4 = 왼손 검지~소지, 7 8 9 0 = 오른손 검지~소지, Shift를 누르면 손등(US 자판의 !@#$ / &*(),
+# ! = 모음 ㆍ), - = 모음 가로 끌기(ㅡ), / = 모음 세로 끌기(ㅣ), Space = 왼손 주먹, Backspace = 오른손 주먹(지움)
 TEST_KEYS = {ord(char): (hand, finger, face, None)
              for chars, hand, face in (("1234", "Left", "palm"), ("!@#$", "Left", "back"),
                                        ("7890", "Right", "palm"), ("&*()", "Right", "back"))
              for finger, char in enumerate(chars)}
-TEST_KEYS.update({ord("-"): ("Left", 1, "palm", "h"), ord("/"): ("Left", 1, "palm", "v")})
+TEST_KEYS.update({ord("-"): ("Left", 0, "back", "h"), ord("/"): ("Left", 0, "back", "v")})
 
 DIM = (200, 202, 210, 150)
 OK_GREEN = (126, 224, 176, 255)
@@ -336,11 +336,11 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
 HELP_LINES = [
     "손끝 꼬집기 천지인",
     "같은 손가락 반복 = 순환(대기 글자가 손끝으로 올라옴) · 다른 키 = 자동 확정",
-    "왼손 손바닥: ㅂㅍㅃ · 모음 · ㅅㅎㅆ · ㅈㅊㅉ  ·  모음(중지): 꼬집기 ㆍ, 꼬집은 채 가로로 끌기 ㅡ, 세로로 끌기 ㅣ",
-    "오른손 손바닥: ㄱㅋㄲ ㄴㄹ ㄷㅌㄸ ㅇㅁ  ·  왼손 손등: 지움 · 공백 · 확정 · .,?!줄바꿈",
+    "왼손 손바닥: ㅂㅍㅃ ㄹ ㅅㅎㅆ ㅈㅊㅉ  ·  오른손 손바닥: ㄱㅋㄲ ㄴ ㄷㅌㄸ ㅇㅁ  (ㄴ·ㄹ은 순환 없이 바로)",
+    "왼손 손등: 모음 · 공백 · 확정 · .,?!줄바꿈  ·  모음(검지): 꼬집기 ㆍ, 꼬집은 채 가로로 끌기 ㅡ, 세로로 끌기 ㅣ",
     "오른손 손등 검지: 확정/공백(후보가 있으면 확정, 없으면 공백)",
     "주먹(양손): 마지막 자모 지움(감 → 가 → ㄱ), 쥐고 있으면 0.5초마다 계속",
-    "키보드 시험: 1~4 왼손(- 가로 끌기, / 세로 끌기) · 7 8 9 0 오른손 · Shift와 함께 손등 · Space/Backspace 주먹(지움)",
+    "키보드 시험: 1~4 왼손 · 7 8 9 0 오른손 · Shift와 함께 손등(! 모음, - 가로 끌기, / 세로 끌기) · Space/Backspace 주먹(지움)",
     "T 손끝 라벨 · K 자판 지도 · D 진단 수치(꼬집기 거리) · [ ] 꼬집기 판정 거리",
     "C 복사 · X 전체 지우기 · P 일시정지 · S 저장 · G 스크린샷 · F 전체 화면 · H 닫기 · Q 종료",
 ]

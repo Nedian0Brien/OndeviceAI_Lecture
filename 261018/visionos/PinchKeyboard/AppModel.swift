@@ -37,11 +37,17 @@ final class AppModel {
     var layouts: [String: HandLayout] = [:]  // 손 → 이번 프레임 배치
     var frameTime: Double = 0  // 이번 프레임 시각(순환 애니메이션)
     var cycles: [String: CycleMotion] = [:]  // "Left-0" → 순환 애니메이션 상태
+    /// 모음 끌기 궤적(월드 m): 손 → 꼬집은 지점(엄지 끝과 손끝의 가운데) 목록. 판정 Python이 끌기에 쓰는 프레임과
+    /// 같은 프레임들이다(dragFrames). 모음 버튼을 꼬집는 동안만 있다.
+    var trails: [String: [SIMD3<Float>]] = [:]
 
     private let engine = PythonEngine()
     private let tracker = HandTracker()
     private var loop: Task<Void, Never>?
     private var pythonReady = false
+    /// 손마다 판정 Python에 넘긴 프레임의 관절(월드). 끌기 궤적을 같은 프레임으로 그리려고 최근 것만 둔다.
+    private var history: [String: [[SIMD3<Float>]]] = [:]
+    private static let historyLimit = 300  // 약 6.7초(45Hz)
 
     /// 기록 파일 폴더(앱 Documents). 파일 앱의 "나의 Vision Pro"에서 보인다.
     var logDirectory: URL {
@@ -102,6 +108,8 @@ final class AppModel {
         tracker.stop()
         handsRunning = false
         layouts = [:]
+        trails = [:]
+        history = [:]
         status = "손 입력 멈춤"
     }
 
@@ -110,8 +118,15 @@ final class AppModel {
         while !Task.isCancelled {
             let frameStart = CACurrentMediaTime()
             let hands = tracker.currentHands()
+            for (label, hand) in hands {
+                history[label, default: []].append(hand.world)
+                if let count = history[label]?.count, count > Self.historyLimit {
+                    history[label]?.removeFirst(count - Self.historyLimit)
+                }
+            }
             apply(await engine.call("step", Self.payload(time: frameStart, hands: hands)))
             layouts = hands.mapValues { HandLayout(points: $0.world) }
+            trails = dragTrails()
             let rest = 1.0 / 45.0 - (CACurrentMediaTime() - frameStart)
             try? await Task.sleep(for: .seconds(max(0.002, rest)))
         }
@@ -137,6 +152,19 @@ final class AppModel {
         if let notice = decoded.notice {
             status = notice
         }
+    }
+
+    /// 모음 버튼을 꼬집는 손마다: 판정이 쓰는 마지막 dragFrames 프레임의 꼬집은 지점(엄지 끝과 그 손가락 끝의 가운데).
+    private func dragTrails() -> [String: [SIMD3<Float>]] {
+        var trails: [String: [SIMD3<Float>]] = [:]
+        for hand in Self.hands {
+            guard let info = state.hands?[hand], let finger = info.dragging, info.dragFrames > 0,
+                  let frames = history[hand], let tip = HandLayout.fingerTips[safe: finger] else {
+                continue
+            }
+            trails[hand] = frames.suffix(info.dragFrames).map { ($0[4] + $0[tip]) / 2 }
+        }
+        return trails
     }
 
     static func payload(time: Double, hands: [String: HandTracker.Hand]) -> String {
@@ -167,7 +195,7 @@ final class AppModel {
         var caption = hand == "Left" ? "왼손" : "오른손"
         switch info.face {
         case "back":
-            caption += " · " + (hand == "Left" ? "손등 편집" : "손등 쉬프트")
+            caption += " · " + (hand == "Left" ? "손등 편집" : "손등 확정/공백")
         case "palm":
             caption += " · 손바닥"
         case "turning":

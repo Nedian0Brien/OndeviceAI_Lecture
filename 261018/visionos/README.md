@@ -10,7 +10,7 @@
 | Swift | `PinchKeyboard/HandTracker.swift` | ARKit 손 관절 27개 → MediaPipe 21점 순서. `world`(월드 m)와 `image`(머리 기준, x 오른쪽·y 아래·z 멀어지는 쪽) 두 벌 |
 | Swift | `PinchKeyboard/AppModel.swift` | 약 45Hz로 관절을 Python에 넘기고 결과(입력 글자·손끝 라벨)를 받는다. 손끝 라벨 위치 |
 | Swift | `ContentView.swift` | 입력 창: Mac HUD 위쪽(입력 캡슐·후보 밑줄·깜빡이는 커서, 순환 그룹 줄)과 아래쪽(상태 안내, 자판 지도), 버튼. 자판은 Mac 앱과 같다(`../README.md` 자판 절) |
-| Swift | `ImmersiveView.swift`, `HandLayout.swift`, `HUDStyle.swift` | 몰입 공간: Mac HUD의 손 위 요소를 3D로(골격선·엄지 끝 점, 유리 원 손끝 라벨, 순환 대기 글자와 올라오는 애니메이션, 다가옴·떼기 진행 호, 손 이름·엄지 가림 안내, 주먹 지움 호). 색·크기 비율·배치 규칙은 `pinch_cheonjiin.draw_hud`·`common/hud.py`와 같다 |
+| Swift | `ImmersiveView.swift`, `HandLayout.swift`, `HUDStyle.swift` | 몰입 공간: Mac HUD의 손 위 요소를 3D로(골격선·엄지 끝 점, 유리 원 손끝 라벨, 순환 대기 글자와 올라오는 애니메이션, 다가옴·떼기 진행 호, 손 이름·엄지 가림 안내, 주먹 지움 호, 모음 끌기 궤적·기준 원·획 미리 보기). 끌기 궤적은 판정 Python이 알려 준 프레임 수(`drag_frames`)만큼 같은 프레임의 관절로 그린다. 색·크기 비율·배치 규칙은 `pinch_cheonjiin.draw_hud`·`common/hud.py`와 같다 |
 | Swift | `SettingsView.swift`, `PythonEngine.swift`의 `RuleSettings` | 설정 창: 판정 규칙 켜기·끄기(누르고 유지 0.3초, 손을 뒤집은 직후 0.3초 무시, 오른손 검지 지나감, 엄지 가림)와 손 가림 선택. 규칙 설정은 기기에 저장되고 시작할 때 판정 Python에 적용된다 |
 | C | `PinchKeyboard/PythonHost.c` | 내장 Python 시작(`pyhost_start`)·호출(`pyhost_call`) |
 | Python | `../pinch_vision.py` | `Session.step(JSON) → JSON`: `hand_signal` → `PinchTyper.update` → 상태. 기록 |

@@ -53,7 +53,7 @@ KEYS = {("Left", "palm"): LEFT_KEYS, ("Left", "back"): EDIT_KEYS,
         ("Right", "palm"): RIGHT_KEYS, ("Right", "back"): RIGHT_BACK_KEYS}
 PUNCTUATION = (".", ",", "?", "!", "\n")
 VOWEL_LABELS = {"1": "ㅣ", "2": "ㆍ", "3": "ㅡ"}
-EDIT_LABELS = {"BACK": "지움", "SPACE": "공백", "COMMIT": "확정", "COMMIT_SPACE": "공백", "VOWEL": "ㆍㅡㅣ"}
+EDIT_LABELS = {"BACK": "지움", "SPACE": "공백", "COMMIT": "확정", "COMMIT_SPACE": "공백", "VOWEL": "모음"}
 # 모음 버튼의 끌기: 꼬집는 동안 꼬집기 지점(엄지 끝과 고른 손끝의 가운데, 이미지 좌표)이 가장 멀리 간 이동이 손 크기
 # (이미지 좌표의 손목~중지 뿌리)의 DRAG_MIN배보다 작으면 끌기 없음(ㆍ), 크면 가로·세로 중 큰 쪽(ㅡ / ㅣ).
 # 엄지 끝만 보지 않는 것은 떼며 엄지만 벌어지는 것을 끌기로 세지 않기 위해서고, 떼기 기준 위 프레임도 세지 않는다.
@@ -694,22 +694,41 @@ class PinchTyper:
         return face == "palm" and bool(held) and statistics.median(s.roll for s in held) <= self.occluded_roll
 
     @staticmethod
-    def drag(held, finger):
-        """이번 접촉의 끌기(None / "h" / "v"): 꼬집기 지점(엄지 끝과 finger 손끝의 가운데)이 접촉 시작부터 가장 멀리 간 이동.
+    def pinch_path(held, finger):
+        """꼬집기 지점(엄지 끝과 finger 손끝의 가운데, 이미지 좌표) 목록과 손 크기(중앙값). 손끝 좌표가 없으면 ([], 0)."""
+        frames = [s for s in held if s.tips]
+        points = [((s.tips[0][0] + s.tips[finger + 1][0]) / 2, (s.tips[0][1] + s.tips[finger + 1][1]) / 2)
+                  for s in frames]
+        return points, (statistics.median(s.size for s in frames) if frames else 0.0)
+
+    @staticmethod
+    def drag_of_path(points, size):
+        """꼬집기 지점 목록 → 끌기(None / "h" / "v"): 처음 지점에서 가장 멀리 간 이동."""
+        if not points:
+            return None
+        ox, oy = points[0]
+        dx, dy = max(((x - ox, y - oy) for x, y in points), key=lambda d: math.hypot(*d))
+        return drag_of(dx, dy, size)
+
+    @classmethod
+    def drag(cls, held, finger):
+        """이번 접촉의 끌기(None / "h" / "v"): 꼬집기 지점이 접촉 시작부터 가장 멀리 간 이동.
 
         떼며 벌어지는 마지막 RELEASE_FRAMES 프레임은 세지 않는다(DRAG_MIN 설명).
         """
-        frames = [s for s in (held[:-RELEASE_FRAMES] if len(held) > RELEASE_FRAMES else held) if s.tips]
-        if not frames:
+        return cls.drag_of_path(*cls.pinch_path(held[:-RELEASE_FRAMES] if len(held) > RELEASE_FRAMES else held, finger))
+
+    def drag_view(self, hand):
+        """화면용: 그 손이 모음 버튼을 꼬집는 중이면 {"finger", "points"(꼬집기 지점, 이미지 좌표), "size", "drag"(지금
+        떼면 들어갈 끌기)}. 아니면 None. 사용자가 끄는 모양을 그리고, 끌기 기준 원과 들어갈 획을 미리 보여 주는 데 쓴다."""
+        state, face = self.hands[hand], self.face(hand)
+        finger = state.pinch.active
+        if finger is None or face is None or KEYS[(hand, face)][finger] != "VOWEL":
             return None
-
-        def point(signal):
-            (tx, ty), (fx, fy) = signal.tips[0], signal.tips[finger + 1]
-            return (tx + fx) / 2, (ty + fy) / 2
-
-        ox, oy = point(frames[0])
-        dx, dy = max(((x - ox, y - oy) for x, y in map(point, frames)), key=lambda d: math.hypot(*d))
-        return drag_of(dx, dy, statistics.median(s.size for s in frames))
+        points, size = self.pinch_path(state.held, finger)
+        if not points:
+            return None
+        return {"finger": finger, "points": points, "size": size, "drag": self.drag_of_path(points, size)}
 
     def occluded(self, hand):
         """화면 안내용: 그 손이 지금 손바닥이고 엄지가 가려질 만큼 소지 쪽으로 기울었는가."""

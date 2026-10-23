@@ -58,6 +58,11 @@ struct PinchState: Decodable {
         var fist: Double
         var map: [String?]
         var fingers: [Finger]
+        var dragging: Int?  // 모음 버튼을 꼬집는 중인 손가락
+        var dragFrames: Int  // 판정에 쓰는 이번 접촉의 프레임 수(이 손이 보인 마지막 프레임들)
+        var dragRadius: Double  // 끌기 기준 거리(m)
+        var dragPreview: String?  // 지금 떼면 들어갈 획
+        var dragPassed: Bool  // 끌기 기준을 넘었는가
     }
 
     var text: String?

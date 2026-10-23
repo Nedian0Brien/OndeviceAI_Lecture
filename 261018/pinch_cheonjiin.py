@@ -30,8 +30,8 @@ from common.landmarks import (DISTAL_SEGMENTS, FINGER_MCPS, FINGER_TIPS, HAND_CO
                               to_pixels)
 from common.pose import pose_from_image
 from pinch_collect import FINGER_NAMES, KINDS, Collector, WordCollector
-from pinch_typer import (HOLD_TIME, KEYS, PINCH_ENTER, PINCH_EXIT, PinchTyper, cycle_queue, group_of,
-                         hand_signal, key_label, replay)
+from pinch_typer import (DRAG_MIN, DRAG_STROKES, HOLD_TIME, KEYS, PINCH_ENTER, PINCH_EXIT, VOWEL_LABELS, PinchTyper,
+                         cycle_queue, group_of, hand_signal, key_label, replay)
 
 
 WINDOW = "Pinch Cheonjiin"
@@ -215,6 +215,33 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         thumb = points[THUMB_TIP]
         r = 3 * s
         draw.ellipse((thumb[0] - r, thumb[1] - r, thumb[0] + r, thumb[1] + r), fill=(245, 248, 252, 200))
+        drag = typer.drag_view(label)
+        if drag is not None:
+            # 모음 끌기: 꼬집은 지점(엄지 끝과 중지 끝의 가운데)이 지나온 길, 시작점 둘레의 끌기 기준 원(이 밖으로
+            # 나가면 끌기), 지금 떼면 들어갈 획. 판정(PinchTyper.drag)과 같은 점들이다.
+            passed = drag["drag"] is not None
+            ink = OK_GREEN if passed else WHITE
+            path = drag["points"]
+            ox, oy = path[0]
+            radius = DRAG_MIN * drag["size"]
+            draw.ellipse((ox - radius, oy - radius, ox + radius, oy + radius), outline=(237, 242, 250, 90),
+                         width=stroke)
+            if len(path) > 1:
+                draw.line(path, fill=ink[:3] + (230,), width=max(3, round(4 * s)), joint="curve")
+            ex, ey = path[-1]
+            r = max(3, 4 * s)
+            draw.ellipse((ex - r, ey - r, ex + r, ey + r), fill=ink[:3] + (245,))
+            # 획 미리 보기: 꼬집은 지점에서 손목 → 중지 뿌리 방향으로 손끝 라벨 줄 바깥에 둔다(라벨을 가리지 않게).
+            badge = diameter * 1.3
+            ux, uy = points[MIDDLE_MCP][0] - points[WRIST][0], points[MIDDLE_MCP][1] - points[WRIST][1]
+            norm = math.hypot(ux, uy) or 1.0
+            bx, by = ex + ux / norm * diameter * 2.6, ey + uy / norm * diameter * 2.6
+            bx = min(max(bx, badge / 2 + margin), w - badge / 2 - margin)  # 화면 밖으로 나가지 않게
+            by = min(max(by, badge / 2 + margin), h - badge / 2 - margin)
+            glass((bx - badge / 2, by - badge / 2, bx + badge / 2, by + badge / 2), circle=True,
+                  tint=OK_GREEN if passed else None)
+            write((bx, by), VOWEL_LABELS[DRAG_STROKES[drag["drag"]]],
+                  hud_font(fonts[1], max(10, round(badge * 0.62))), WHITE, "mm", True)
         if state.fist.progress > 0:
             # 주먹 진행: 손목~중지 뿌리 가운데에 호(양손 모두 지움). 쥐고 있으면 다음 지움까지의 진행이다.
             cx = (points[WRIST][0] + points[MIDDLE_MCP][0]) / 2

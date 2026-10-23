@@ -15,6 +15,10 @@ step 출력(Mac 앱 HUD가 그리는 것과 같은 정보, pinch_cheonjiin.draw_
    "group": 순환 중인 그룹 글자 목록 또는 null, "group_index": 그룹에서 지금 글자 위치,
    "hold_mode": 누르고 유지 방식인가,
    "hands": {손: {"face", "occluded", "armed", "fist",
+                  "dragging": 모음 버튼을 꼬집는 중인 손가락 번호 또는 null(그동안 앱이 끄는 궤적을 그린다),
+                  "drag_frames": 판정에 쓰는 이번 접촉의 프레임 수(이 손이 보인 마지막 프레임들. 앱은 같은 프레임의
+                                 관절로 궤적을 그린다), "drag_radius": 끌기 기준 거리(m, 손 크기 × DRAG_MIN),
+                  "drag_preview": 지금 떼면 들어갈 획(ㆍ / ㅡ / ㅣ), "drag_passed": 끌기 기준을 넘었는가,
                   "map": [자판 지도 키 이름 또는 null × 4],
                   "fingers": [{"queue", "active", "approach", "release", "hold"} × 4]}},
    "log": 기록 파일 경로 또는 null}
@@ -35,8 +39,8 @@ import time
 from types import SimpleNamespace
 
 from common.pose import pose_from_image
-from pinch_typer import (KEYS, OCCLUDED_ROLL, SETTLE, PinchTyper, cycle_queue, group_of, hand_signal, key_label,
-                         replay)
+from pinch_typer import (DRAG_MIN, DRAG_STROKES, KEYS, OCCLUDED_ROLL, SETTLE, VOWEL_LABELS, PinchTyper, cycle_queue,
+                         group_of, hand_signal, key_label, replay)
 
 HANDS = ("Left", "Right")
 FIXTURES = Path(__file__).resolve().with_name("fixtures") / "pinch-typer-keys.json"
@@ -89,11 +93,17 @@ class Session:
             held = hand.pinch.hold_progress(self.now)
             face = typer.face(label) or "palm"
             keys = KEYS[(label, face)]
+            drag = typer.drag_view(label)
             hands[label] = {
                 "face": hand.orientation.state,
                 "occluded": typer.occluded(label),
                 "armed": hand.pinch.armed,
                 "fist": hand.fist.progress,
+                "dragging": None if drag is None else drag["finger"],
+                "drag_frames": 0 if drag is None else len(drag["points"]),
+                "drag_radius": 0.0 if drag is None else round(DRAG_MIN * drag["size"] / IMAGE_SCALE, 4),
+                "drag_preview": None if drag is None else VOWEL_LABELS[DRAG_STROKES[drag["drag"]]],
+                "drag_passed": drag is not None and drag["drag"] is not None,
                 "map": [None if key is None else key_label(key) for key in keys],
                 "fingers": [{"queue": cycle_queue(typer, label, finger), "active": hand.pinch.active == finger,
                              "approach": round(approach[finger], 3),

@@ -350,6 +350,21 @@ class KeyboardFrameTest(unittest.TestCase):
             vowel(run, drag)
             self.assertEqual(run.kinds("input"), [("input", expected)], drag)
 
+    def test_drag_view_while_pinching_vowel(self):
+        # 모음 버튼을 꼬집는 동안 화면용 궤적과 지금 떼면 들어갈 끌기를 알 수 있다. 다른 키·접촉 없음은 None.
+        run = Runner().ready()
+        self.assertIsNone(run.typer.drag_view("Left"))
+        for k in range(6):
+            run.frames(1, sig(pinch_ratios_for(1), tips=((50.0, 50.0 + 8 * k),) * 5, size=100.0), sig())
+        view = run.typer.drag_view("Left")
+        self.assertEqual((view["finger"], len(view["points"]), view["drag"]), (1, 6, "v"))
+        self.assertEqual(view["points"][0], (50.0, 50.0))
+        run.frames(3, sig(), sig())
+        self.assertIsNone(run.typer.drag_view("Left"))
+        self.assertEqual(run.kinds("input"), [("input", "ㅣ")])
+        run.frames(4, sig(), sig(pinch_ratios_for(0), tips=((50.0, 50.0),) * 5, size=100.0))  # 오른손 ㄱ: 모음 아님
+        self.assertIsNone(run.typer.drag_view("Right"))
+
     def test_release_motion_is_not_drag(self):
         # 떼는 동안(떼기 기준 위 프레임)만 꼬집기 지점이 크게 움직이면 끌기로 세지 않는다(ㆍ).
         run = Runner().ready()
@@ -653,7 +668,7 @@ class VisionSessionTest(unittest.TestCase):
         last = outputs[-1]
         self.assertEqual((last["text"], last["hands"]["Left"]["face"]), ("ㅂ", "palm"))
         self.assertEqual([f["queue"] for f in last["hands"]["Left"]["fingers"]],
-                         [["ㅍ", "ㅃ", "ㅂ"], ["ㆍㅡㅣ"], ["ㅅ", "ㅎ", "ㅆ"], ["ㅈ", "ㅊ", "ㅉ"]])
+                         [["ㅍ", "ㅃ", "ㅂ"], ["모음"], ["ㅅ", "ㅎ", "ㅆ"], ["ㅈ", "ㅊ", "ㅉ"]])
         self.assertTrue(any(out["hands"]["Left"]["fingers"][0]["active"] for out in outputs))
 
     def test_fist_deletes_with_meter_coordinates(self):
@@ -675,6 +690,33 @@ class VisionSessionTest(unittest.TestCase):
         outputs, _ = self.run_frames(session, [meters(open_hand)] * 25 + [meters(fist)] * 10 + [meters(open_hand)] * 3)
         self.assertIn(["delete", None], [e for out in outputs for e in out["events"]])
         self.assertEqual(outputs[-1]["text"], "")
+
+    def test_vowel_drag_state(self):
+        # 모음 버튼(왼손 중지)을 꼬집은 채 아래로 끌면, 꼬집는 동안 끌기 상태(프레임 수·기준 거리 m·미리 볼 획)가 나오고
+        # 떼면 ㅣ가 들어간다. 기기처럼 image는 m 단위다.
+        from common import synthetic
+        from pinch_vision import Session
+
+        def meters(world, down=0.0):
+            moved = world + [0.0, down, 0.0]
+            return {"world": moved.tolist(), "image": moved.tolist()}
+
+        open_hand = synthetic.world_hand(synthetic.AWAY)
+        middle_pad = tuple((open_hand[11] + open_hand[12]) / 2 + [0.004, 0, 0])
+        pinch = synthetic.world_hand(middle_pad)
+        frames = ([meters(open_hand)] * 25 + [meters(pinch, 0.006 * k) for k in range(8)]
+                  + [meters(open_hand, 0.042)] * 3)
+        outputs, _ = self.run_frames(Session(), frames)
+        dragging = [out["hands"]["Left"] for out in outputs if out["hands"]["Left"]["dragging"] is not None]
+        self.assertTrue(dragging)
+        self.assertEqual({hand["dragging"] for hand in dragging}, {1})
+        counts = [hand["drag_frames"] for hand in dragging]
+        self.assertEqual(counts, sorted(counts))
+        self.assertTrue(0.01 < dragging[-1]["drag_radius"] < 0.04, dragging[-1]["drag_radius"])
+        self.assertEqual((dragging[0]["drag_preview"], dragging[0]["drag_passed"]), ("ㆍ", False))
+        self.assertEqual((dragging[-1]["drag_preview"], dragging[-1]["drag_passed"]), ("ㅣ", True))
+        self.assertEqual(outputs[-1]["hands"]["Left"]["dragging"], None)
+        self.assertEqual([e for out in outputs for e in out["events"]], [["input", "ㅣ"]])
 
     def test_demo_and_clear(self):
         from pinch_vision import Session
@@ -830,7 +872,7 @@ class CycleQueueTest(unittest.TestCase):
         self.assertEqual(cycle_queue(typer, "Right", 1), ["ㄴ", "ㄹ"])  # 다른 손가락은 처음부터
         # 왼손 손바닥: ㅂㅍㅃ · 모음 · ㅅㅎㅆ · ㅈㅊㅉ. 같은 손·손가락일 때만 순환한다(오른손 검지 ≠ 왼손 검지).
         self.assertEqual([cycle_queue(typer, "Left", f) for f in range(4)],
-                         [["ㅂ", "ㅍ", "ㅃ"], ["ㆍㅡㅣ"], ["ㅅ", "ㅎ", "ㅆ"], ["ㅈ", "ㅊ", "ㅉ"]])
+                         [["ㅂ", "ㅍ", "ㅃ"], ["모음"], ["ㅅ", "ㅎ", "ㅆ"], ["ㅈ", "ㅊ", "ㅉ"]])
         typer.press_finger("Left", 2, 1.0)  # ㅅ → 같은 손가락 다시 꼬집으면 ㅎ
         self.assertEqual(cycle_queue(typer, "Left", 2), ["ㅎ", "ㅆ", "ㅅ"])
         self.assertEqual(cycle_queue(typer, "Right", 0), ["ㄱ", "ㅋ", "ㄲ"])

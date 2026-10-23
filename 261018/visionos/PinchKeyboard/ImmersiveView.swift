@@ -4,11 +4,13 @@ import UIKit
 import simd
 
 /// 몰입 공간: Mac 앱 HUD(draw_hud)의 손 위 요소를 손 관절 3D 위치에 그린다.
-/// 골격선·엄지 끝 점, 손끝 라벨(유리 원), 순환 대기 글자, 다가옴·떼기 진행 호, 손 이름, 주먹 지움 호.
+/// 골격선·엄지 끝 점, 손끝 라벨(유리 원), 순환 대기 글자, 다가옴·떼기 진행 호, 손 이름, 주먹 지움 호,
+/// 모음 끌기(꼬집은 지점이 지나온 길, 끌기 기준 원, 지금 떼면 들어갈 획).
 /// 손 추적은 이 공간이 열려 있는 동안만 돈다.
 struct ImmersiveView: View {
     @Environment(AppModel.self) private var model
     @State private var skeleton = SkeletonEntities()
+    @State private var trail = TrailEntities()
 
     static let slots = [1, 2]  // 순환 대기 글자 자리(Mac CYCLE_SHOWN 3 → 대기 2)
 
@@ -16,13 +18,14 @@ struct ImmersiveView: View {
         AppModel.hands.flatMap { hand in
             (0..<4).flatMap { finger in
                 ["tip", "arc", "prev"].map { "\(hand)-\(finger)-\($0)" } + slots.map { "\(hand)-\(finger)-q\($0)" }
-            } + ["\(hand)-caption", "\(hand)-fist"]
+            } + ["\(hand)-caption", "\(hand)-fist", "\(hand)-dragring", "\(hand)-dragbadge"]
         }
     }
 
     var body: some View {
         RealityView { content, attachments in
             content.add(skeleton.root)
+            content.add(trail.root)
             for id in Self.attachmentIDs {
                 if let entity = attachments.entity(for: id) {
                     entity.components.set(BillboardComponent())  // 항상 사용자를 향한다
@@ -32,6 +35,7 @@ struct ImmersiveView: View {
             }
         } update: { _, attachments in
             skeleton.update(model.showGuides ? model.layouts : [:])
+            trail.update(model.trails, passed: model.state.hands?.mapValues(\.dragPassed) ?? [:])
             let placements = HUDPlacement.compute(model: model)
             for id in Self.attachmentIDs {
                 guard let entity = attachments.entity(for: id) else {
@@ -58,6 +62,8 @@ struct ImmersiveView: View {
                 }
                 Attachment(id: "\(hand)-caption") { HandCaptionView(hand: hand) }
                 Attachment(id: "\(hand)-fist") { FistArcView(hand: hand) }
+                Attachment(id: "\(hand)-dragring") { DragRingView(hand: hand) }
+                Attachment(id: "\(hand)-dragbadge") { DragBadgeView(hand: hand) }
             }
         }
         .task { await model.startHands() }
@@ -79,6 +85,11 @@ enum HUDPlacement {
             }
             if info.fist > 0 {
                 placements["\(hand)-fist"] = layout.palmCenter
+            }
+            if let path = model.trails[hand], let start = path.first, let end = path.last {
+                // 끌기 기준 원은 꼬집기 시작점에, 획 미리 보기는 꼬집은 지점에서 손끝 라벨 줄 바깥에(Mac과 같다).
+                placements["\(hand)-dragring"] = start
+                placements["\(hand)-dragbadge"] = end + layout.forward * layout.diameter * 2.6
             }
             for finger in 0..<4 {
                 guard let state = info.fingers[safe: finger], !state.queue.isEmpty else {
@@ -163,6 +174,81 @@ final class SkeletonEntities {
             }
             thumbs[hand]?.position = layout.points[4]
             thumbs[hand]?.isEnabled = true
+        }
+    }
+}
+
+/// 모음 끌기 궤적: 꼬집은 지점이 지나온 길을 이은 선(Mac: 굵기 4px, 흰색 → 기준을 넘으면 초록)과 끝 점.
+@MainActor
+final class TrailEntities {
+    static let limit = 300  // 손마다 선분 수(AppModel.historyLimit와 같다)
+    let root = Entity()
+    private var segments: [String: [ModelEntity]] = [:]
+    private var heads: [String: ModelEntity] = [:]
+    private var passedState: [String: Bool] = [:]
+    private var shown: [String: Int] = [:]  // 직전 프레임에 켠 선분 수(그 뒤는 이미 꺼져 있다)
+    private let white: UnlitMaterial
+    private let green: UnlitMaterial
+
+    init() {
+        var white = UnlitMaterial(color: UIColor(red: 250 / 255, green: 250 / 255, blue: 252 / 255, alpha: 1))
+        white.blending = .transparent(opacity: .init(floatLiteral: 230.0 / 255))
+        var green = UnlitMaterial(color: UIColor(red: 126 / 255, green: 224 / 255, blue: 176 / 255, alpha: 1))
+        green.blending = .transparent(opacity: .init(floatLiteral: 230.0 / 255))
+        self.white = white
+        self.green = green
+        let cylinder = MeshResource.generateCylinder(height: 1, radius: 0.0013)
+        let sphere = MeshResource.generateSphere(radius: 0.0024)
+        for hand in AppModel.hands {
+            segments[hand] = (0..<Self.limit).map { _ in
+                let segment = ModelEntity(mesh: cylinder, materials: [white])
+                segment.isEnabled = false
+                root.addChild(segment)
+                return segment
+            }
+            let head = ModelEntity(mesh: sphere, materials: [white])
+            head.isEnabled = false
+            root.addChild(head)
+            heads[hand] = head
+            passedState[hand] = false
+        }
+    }
+
+    func update(_ trails: [String: [SIMD3<Float>]], passed: [String: Bool]) {
+        for hand in AppModel.hands {
+            let path = trails[hand] ?? []
+            let isPassed = passed[hand] ?? false
+            if passedState[hand] != isPassed {
+                let material = isPassed ? green : white
+                segments[hand]?.forEach { $0.model?.materials = [material] }
+                heads[hand]?.model?.materials = [material]
+                passedState[hand] = isPassed
+            }
+            let pool = segments[hand] ?? []
+            let used = min(pool.count, max(path.count - 1, 0))
+            for (index, segment) in pool.prefix(max(used, shown[hand] ?? 0)).enumerated() {
+                guard index < used else {
+                    segment.isEnabled = false
+                    continue
+                }
+                let start = path[index], end = path[index + 1]
+                let length = simd_distance(start, end)
+                guard length > 1e-5 else {
+                    segment.isEnabled = false
+                    continue
+                }
+                segment.position = (start + end) / 2
+                segment.orientation = simd_quatf(from: SIMD3(0, 1, 0), to: (end - start) / length)
+                segment.scale = SIMD3(1, length, 1)
+                segment.isEnabled = true
+            }
+            shown[hand] = used
+            if let last = path.last {
+                heads[hand]?.position = last
+                heads[hand]?.isEnabled = true
+            } else {
+                heads[hand]?.isEnabled = false
+            }
         }
     }
 }
@@ -326,6 +412,44 @@ struct FistArcView: View {
         }
         .frame(width: size, height: size)
         .padding(6 * metrics.unit)  // 호의 선 두께 절반과 글자 외곽선 그림자가 사각형으로 잘리던 문제(사용자, 2026-10-23)
+    }
+}
+
+/// 끌기 기준 원: 꼬집기 시작점 둘레. 꼬집은 지점이 이 원 밖으로 나가면 끌기(ㅡ / ㅣ)다. 반지름은 판정 Python이 준 값(m).
+struct DragRingView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.physicalMetrics) private var physicalMetrics
+    let hand: String
+
+    var body: some View {
+        let metrics = HandMetrics(model: model, hand: hand, physicalMetrics: physicalMetrics)
+        let radius = physicalMetrics.convert(CGFloat(model.state.hands?[hand]?.dragRadius ?? 0), from: .meters)
+        Circle()
+            .stroke(HUD.ringBase, lineWidth: max(1, metrics.unit))
+            .frame(width: radius * 2, height: radius * 2)
+            .padding(2 * metrics.unit)  // 선 두께 절반이 잘리지 않게
+    }
+}
+
+/// 획 미리 보기: 지금 떼면 들어갈 획(ㆍ / ㅡ / ㅣ). 끌기 기준을 넘으면 초록.
+struct DragBadgeView: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.physicalMetrics) private var physicalMetrics
+    let hand: String
+
+    var body: some View {
+        let metrics = HandMetrics(model: model, hand: hand, physicalMetrics: physicalMetrics)
+        if let info = model.state.hands?[hand], let stroke = info.dragPreview {
+            let size = metrics.diameter * 1.3
+            Text(stroke)
+                .font(.system(size: size * 0.62, weight: .medium))
+                .foregroundStyle(HUD.white)
+                .outlined()
+                .frame(width: size, height: size)
+                .background(GlassShape(circle: true, tint: info.dragPassed ? HUD.okGreen : nil,
+                                       lineWidth: max(1, metrics.unit)))
+                .padding(3 * metrics.unit)  // 테두리·외곽선 그림자가 잘리지 않게
+        }
     }
 }
 

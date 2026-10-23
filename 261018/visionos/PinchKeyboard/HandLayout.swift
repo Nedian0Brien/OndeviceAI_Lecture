@@ -65,6 +65,12 @@ struct HandLayout {
         return points[0] + direction * 0.02
     }
 
+    /// 손목 → 중지 뿌리 방향 단위 벡터.
+    var forward: SIMD3<Float> {
+        let direction = points[9] - points[0]
+        return simd_length(direction) > 1e-6 ? simd_normalize(direction) : SIMD3(0, 1, 0)
+    }
+
     /// 주먹 진행 자리: 손목~중지 뿌리 가운데.
     var palmCenter: SIMD3<Float> {
         (points[0] + points[9]) / 2

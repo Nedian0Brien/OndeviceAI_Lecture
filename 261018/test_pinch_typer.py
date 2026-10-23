@@ -374,6 +374,15 @@ class KeyboardFrameTest(unittest.TestCase):
         vowel(run)  # 그대로 ㆍ → ㅏ
         self.assertEqual(run.typer.ime.text, "가")
 
+    def test_back_pinch_with_other_fingers_curled(self):
+        # 손등 검지(모음) 꼬집기에서는 중지·약지·소지가 굽어도(curled 0111) 입력한다. 손바닥에서는 주먹 스침으로 버린다.
+        curled = (False, True, True, True)
+        for facing, expected in ((BACK, [("input", "ㆍ")]), (0.8, [])):
+            run = Runner().ready(left_facing=facing)
+            run.frames(6, sig(pinch_ratios_for(0), facing=facing, curled=curled), sig())
+            run.frames(3, sig(facing=facing), sig())
+            self.assertEqual(run.kinds("input"), expected, facing)
+
     def test_vowel_drag_direction(self):
         # 모음 버튼(왼손 손등 검지): 그대로 ㆍ, 가로 끌기 ㅡ, 세로 끌기 ㅣ(pinch_typer.DRAG_MIN).
         for drag, expected in ((None, "ㆍ"), ("h", "ㅡ"), ("v", "ㅣ")):
@@ -717,6 +726,20 @@ class VisionSessionTest(unittest.TestCase):
         self.assertEqual([f["queue"] for f in last["hands"]["Left"]["fingers"]],
                          [["ㅍ", "ㅃ", "ㅂ"], ["ㄹ"], ["ㅅ", "ㅎ", "ㅆ"], ["ㅈ", "ㅊ", "ㅉ"]])
         self.assertTrue(any(out["hands"]["Left"]["fingers"][0]["active"] for out in outputs))
+
+    def test_fist_rearms_without_full_open(self):
+        # Vision Pro: 주먹을 연달아 쥘 때 손을 반쯤만 펴도(자세 closing) 주먹이 아닌 상태가 FIST_REARM초 이어지면
+        # 다음 주먹으로 다시 지운다. 쥔 채 잠깐 끊기는 것(FIST_REARM 미만)으로는 다시 세지 않는다.
+        from common.gestures import FistHold
+        from pinch_vision import FIST_REARM
+        for rearm, expected in ((FIST_REARM, 2), (None, 1)):
+            fist, now, fired = FistHold(repeat=None, rearm=rearm), 0.0, 0
+            frames = ([("open", True)] * 5 + [("fist", False)] * 10 + [("closing", True)] * 2 + [("fist", False)] * 3
+                      + [("closing", True)] * 10 + [("fist", False)] * 10)
+            for pose, relaxed in frames:
+                now += 1 / 45
+                fired += fist.update(pose, now, relaxed)
+            self.assertEqual(fired, expected, rearm)
 
     def test_fist_deletes_with_meter_coordinates(self):
         # 기기처럼 image를 m 단위로 넘겨도 편 손 / 주먹 자세가 판정되고, 손바닥에서 주먹을 쥐면 지운다.

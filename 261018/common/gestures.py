@@ -75,10 +75,13 @@ class FistHold:
     중간에 "closing"이 섞이면 유지 시간을 처음부터 다시 잰다.
     repeat(초)를 주면 첫 확정 뒤 주먹을 쥐고 있는 동안 repeat초마다 다시 True를 돌려준다(연속 지우기).
     쥔 채 잠깐 "closing"으로 읽히는 프레임에서는 내보내지 않지만 반복을 끊지도 않는다. 손을 펴면 멈춘다.
+    rearm(초)을 주면 "open"까지 펴지 않아도 주먹이 아닌 상태(update의 relaxed)가 rearm초 이어지면 다시 센다.
+    Vision Pro는 주먹을 연달아 쥘 때 손을 반쯤만 펴서("closing") 두 번째 주먹부터 지워지지 않았다(2026-10-24 기록:
+    오른손 주먹 구간 20개 중 11개). Mac 카메라는 주먹을 쥔 채로도 0.1~0.4초씩 끊겨 쓰지 않는다(None).
     """
 
-    def __init__(self, hold=0.18, repeat=None):
-        self.hold, self.repeat = hold, repeat
+    def __init__(self, hold=0.18, repeat=None, rearm=None):
+        self.hold, self.repeat, self.rearm = hold, repeat, rearm
         self.lost()
 
     def lost(self):
@@ -86,9 +89,18 @@ class FistHold:
         self.since = None
         self.next_repeat = None  # 반복 중이면 다음에 내보낼 시각
         self.progress = 0.0  # 주먹 유지 진행 0~1 (화면 표시용)
+        self.relaxed_since = None  # 주먹이 아닌 상태가 시작된 시각(rearm)
 
-    def update(self, pose, now):
+    def update(self, pose, now, relaxed=None):
+        """relaxed: 주먹이 아닌 상태인가(자세가 주먹도 아니고 네 손가락이 다 굽지도 않음). rearm을 쓸 때만 본다."""
         self.progress = 0.0
+        if self.rearm is not None:
+            if not relaxed:
+                self.relaxed_since = None
+            elif self.relaxed_since is None:
+                self.relaxed_since = now
+            elif now - self.relaxed_since >= self.rearm:
+                self.armed, self.since, self.next_repeat = True, None, None
         if pose == "open":
             self.armed, self.since, self.next_repeat = True, None, None
             return False

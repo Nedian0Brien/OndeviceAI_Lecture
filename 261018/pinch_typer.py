@@ -114,6 +114,9 @@ REPRESS_DROP, REPRESS_WINDOW = 0.08, 1.0
 # 소지 첫 차례가 0.00~0.05까지 꼬집은 시도 10번을 모두 버려 10.7초 걸렸다. 주먹은 검지까지 넷 다 굽으므로 3으로 둔다.
 # 3으로 바꿔 모든 로그를 다시 돌리면 꼬집기 223 → 238개, 주먹(지움) ±0.6초 안의 꼬집기는 그대로 0개다.
 SPOIL_CURLED = 3
+# 손등 꼬집기에는 이 규칙을 쓰지 않는다(FingerPinch.spoil_curled). Vision Pro에서 손을 뒤집어 검지(모음 버튼)를 꼬집으면
+# 중지·약지·소지가 자연스럽게 굽어(curled 0111) 2026-10-23 단어 입력 기록의 손등 검지 접촉 17번 중 13번이 버려졌다
+# (사용자: 모음이 아무리 그려도 안 들어감). 손등에서 주먹을 쥐면 주먹 자세 프레임에서 접촉을 버린다(closed_pose).
 # 검지 겹침: 엄지가 검지 옆에서 쉬다가 중지·약지를 꼬집으면 엄지 옆면이 검지를 눌러, 검지 값도 꼬집은 손가락만큼
 # 내려온다(사용자: "엄지가 검지를 밀어내듯이"). 그러면 접촉이 검지에서 시작해 검지로 입력된다.
 # 2026-10-23 오른손 기록(collect-20261023-175304) 20차례 중 4번이 이렇게 틀렸다(중지 3·약지 1).
@@ -323,6 +326,7 @@ class FingerPinch:
         self.drop, self.window = drop, window
         self.hold = hold  # 누르고 유지 시간(초). 0이면 뗄 때 입력
         self.index_depth = HOLD_DEPTH  # 검지가 머물렀다고 볼 거리(손바닥에서는 HOLD_INDEX_DEPTH)
+        self.spoil_curled = True  # 다른 손가락이 SPOIL_CURLED개 이상 굽으면 버리는 규칙(손바닥에서만, PinchTyper가 정한다)
         self.lost()
 
     def lost(self):
@@ -457,7 +461,7 @@ class FingerPinch:
             target = self.hold_finger  # 지금 손끝보다 margin 이상 가까운 손끝이 있을 때만 옮긴다(이웃 손끝 값이 엇갈림)
         depth = self.hold_depth(target)
         others = sum(curled for index, curled in enumerate(signal.curled) if index != target)
-        if signal.pose == "fist" or others >= SPOIL_CURLED:
+        if signal.pose == "fist" or (self.spoil_curled and others >= SPOIL_CURLED):
             self.hold_finger, self.hold_since = target, None
         elif target != self.hold_finger:
             self.hold_finger, self.hold_since = target, (now if ratios[target] <= depth else None)
@@ -484,7 +488,7 @@ class FingerPinch:
 
     def _check(self, signal):
         others = sum(curled for index, curled in enumerate(signal.curled) if index != self.active)
-        if signal.pose == "fist" or others >= SPOIL_CURLED:
+        if signal.pose == "fist" or (self.spoil_curled and others >= SPOIL_CURLED):
             self.spoiled = True
 
     @staticmethod
@@ -797,6 +801,7 @@ class PinchTyper:
             settling = state not in FACES or now - hand.face_since < self.settle
             # 회전 중이거나 방향이 막 바뀌었으면 꼬집기 판정을 쉰다. 다시 시작할 때 기준값은 자리 잡은 자세부터 쌓인다.
             hand.pinch.index_depth = HOLD_INDEX_DEPTH if state == "palm" else HOLD_DEPTH  # 손등은 손가락이 가려 얕다
+            hand.pinch.spoil_curled = state != "back"  # 손등 꼬집기는 다른 손가락이 굽어도 버리지 않는다(SPOIL_CURLED)
             tap = hand.pinch.update(None if settling else signal, now)  # 입력된 프레임에서 (손가락, 접촉 시간)
             if tap is not None and tap[0] == 0 and label == "Right" and state == "palm" and self.index_sweep_rule \
                     and hand.pinch.index_sweep():
@@ -819,7 +824,7 @@ class PinchTyper:
                 hand.held = []
             if signal is None:
                 hand.fist.lost()
-            elif hand.fist.update(signal.pose, now) and state == "palm":
+            elif hand.fist.update(signal.pose, now, relaxed=not FingerPinch.closed_pose(signal)) and state == "palm":
                 events += self.make_fist(label, now)
         return events
 

@@ -137,6 +137,14 @@ WORDS = (
     "우유", "의자", "과일", "뭐해", "왜요", "쌀밥", "빵집", "오늘 날씨", "하늘", "노래", "친구", "바다",
     "좋은 아침", "맛있어요", "행복", "꽃", "뜨거워", "휴대폰", "회사", "귀여워", "예뻐", "얘기",
 )
+# 단어 타이핑 모드(Vision Pro 앱)에서 무작위로 내는 짧은 단어(1~3음절, 띄어쓰기 없음). 모든 자음 그룹(ㄲ·ㄸ·ㅃ·ㅆ·ㅉ 포함),
+# 복합 모음(ㅘ·ㅝ·ㅙ·ㅢ·ㅚ·ㅟ·ㅒ·ㅖ), 받침이 고루 나오게 골랐다. 단어마다 word_steps로 칠 수 있는지 검증한다(테스트).
+SHORT_WORDS = (
+    "가방", "나무", "다리", "라면", "마음", "바다", "사과", "아기", "자리", "차표", "카드", "타조", "파도", "하늘",
+    "꿈", "딸기", "빵", "쌀", "짜다", "토끼", "오리", "우유", "의자", "과자", "귀", "뭐", "왜", "예", "얘기", "회사",
+    "휴지", "교실", "거미", "너구리", "도로", "버스", "소리", "주스", "커피", "포도", "호박", "구름", "눈", "물", "불",
+    "산", "강", "별", "달", "밥", "책", "집", "문", "손", "발", "꽃", "새", "곰", "말", "편지",
+)
 VOWEL_STROKES = {medial: strokes for strokes, medial in VOWELS.items() if medial in MEDIALS}
 VOWEL = ("Left", 0, "back")  # 왼손 손등 검지: 모음 버튼
 STROKE_DRAGS = {".": None, "-": "h", "i": "v"}  # 천지인 획 → 끌기: ㆍ 그대로, ㅡ 가로, ㅣ 세로
@@ -230,6 +238,15 @@ class WordCollector(Collector):
         if current is not None and text == current[1]:
             return self._finish("done", now)
         return []
+
+    @classmethod
+    def shuffled(cls, words=SHORT_WORDS, rounds=5, seed=None):
+        """단어 타이핑 모드: 단어를 바퀴마다 다른 무작위 순서로(rounds바퀴). 순서는 config로 기록 첫 줄에 남는다."""
+        import random
+        collector = cls(rounds, words)
+        rng = random.Random(seed)
+        collector.order = [word for _ in range(rounds) for word in rng.sample(list(words), len(words))]
+        return collector
 
     def round_of(self, number):
         return number // (len(self.order) // self.reps) + 1

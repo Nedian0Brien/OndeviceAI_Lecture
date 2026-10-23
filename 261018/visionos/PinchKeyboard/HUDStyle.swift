@@ -88,18 +88,6 @@ extension GraphicsContext {
     }
 }
 
-/// 선 HUD 패널(common.hud.HudCanvas.panel): 어두운 면 + 가는 테두리. active면 강조 면·테두리.
-struct LinePanel: View {
-    var active = false
-    var cornerRadius: CGFloat = 6
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius)
-            .fill(active ? HUD.accentFill : HUD.backdrop)
-            .overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(active ? HUD.accent : HUD.lineDim, lineWidth: 1))
-    }
-}
-
 /// 가는 원 + 안쪽 면(common.hud.HudCanvas.hairline_circle).
 struct HairlineCircle: View {
     var edge: Color

@@ -788,6 +788,65 @@ class VisionSessionTest(unittest.TestCase):
             self.assertEqual(len(logs[-1].read_text().splitlines()), 3)
             self.assertTrue((folder / "other.txt").exists())
 
+    def test_word_mode(self):
+        # 단어 모드: 짧은 단어를 하나씩 내고, 입력 칸이 그 단어가 되면 다 친 것으로 센 뒤 REST초 쉬고 비운 다음 단어.
+        # 건너뛰기, 지우기(지금 단어 다시), 자유 모드로 돌아가기.
+        from pinch_collect import REST, SHORT_WORDS, word_steps
+        from pinch_vision import Session
+        session = Session()
+
+        def step(t):
+            return json.loads(session.step(json.dumps({"t": t, "hands": {}})))
+
+        out = json.loads(session.command(json.dumps({"cmd": "mode", "mode": "words"})))
+        self.assertEqual(out["mode"], "words")
+        first = step(1.0)["word"]
+        self.assertIn(first["target"], SHORT_WORDS)
+        steps = word_steps(first["target"])
+        for k, (_, hand, finger, face, drag) in enumerate(steps[:-1]):
+            session.typer.press_finger(hand, finger, 1.0 + 0.1 * k, face, drag)
+        partial = step(1.5)["word"]
+        self.assertLessEqual(partial["matched"], len(first["target"]))
+        _, hand, finger, face, drag = steps[-1]
+        session.typer.press_finger(hand, finger, 2.0, face, drag)
+        out = step(2.0)
+        self.assertIn(["collect", 0, first["target"], "done"], out["events"])
+        self.assertEqual((out["word"]["target"], out["word"]["solved"], out["word"]["last"], out["word"]["done"]),
+                         (first["target"], True, [first["target"], "done"], 1))
+        self.assertEqual(out["word"]["seconds"], 1.0)  # 1.0초에 안내, 2.0초에 다 침
+        held = step(2.0 + REST + 1.0)  # 맞히면 저절로 넘어가지 않는다
+        self.assertEqual((held["text"], held["word"]["target"], held["word"]["solved"]),
+                         (first["target"], first["target"], True))
+        nxt = json.loads(session.command(json.dumps({"cmd": "next"})))  # 다음 단어
+        self.assertEqual((nxt["text"], nxt["word"]["solved"]), ("", False))
+        self.assertIn(nxt["word"]["target"], SHORT_WORDS)
+        nxt = step(3.5)
+        session.typer.press_finger("Right", 0, 3.6)  # ㄱ
+        out = json.loads(session.command(json.dumps({"cmd": "clear"})))
+        self.assertEqual(out["text"], "")
+        out = json.loads(session.command(json.dumps({"cmd": "skip"})))
+        self.assertEqual((out["word"]["last"][1], out["word"]["skipped"]), ("skip", 1))
+        out = json.loads(session.command(json.dumps({"cmd": "mode", "mode": "free"})))
+        self.assertEqual((out["mode"], out["word"]), ("free", None))
+
+    def test_word_mode_log_for_eval(self):
+        # 단어 모드 기록: 파일을 새로 열어 첫 줄에 단어 순서, 행마다 지금 단어(pinch_eval.py가 읽는 형식).
+        import tempfile
+        from pinch_eval import read_config
+        from pinch_vision import Session
+        with tempfile.TemporaryDirectory() as folder:
+            session = Session(folder)
+            session.command(json.dumps({"cmd": "log_start"}))
+            session.command(json.dumps({"cmd": "mode", "mode": "words"}))
+            session.step(json.dumps({"t": 1.0, "hands": {}}))
+            session.command(json.dumps({"cmd": "log_stop"}))
+            words = sorted(Path(folder).glob("*-words.jsonl"))
+            self.assertEqual(len(words), 1)
+            rows = [json.loads(line) for line in words[0].read_text().splitlines()]
+            self.assertEqual(read_config(words[0])["kind"], "words")
+            self.assertEqual(rows[1]["prompt"]["id"], 0)
+            self.assertEqual(rows[1]["prompt"]["word"], rows[0]["collect"]["order"][0])
+
     def test_demo_and_clear(self):
         from pinch_vision import Session
         session = Session()

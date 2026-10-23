@@ -23,9 +23,20 @@ step 출력(Mac 앱 HUD가 그리는 것과 같은 정보, pinch_cheonjiin.draw_
                   "map": [자판 지도 키 이름 또는 null × 4],
                   "fingers": [{"queue", "active", "approach", "release", "hold"} × 4]}},
    "echo": {"id", "hand", "text"} 마지막으로 입력된 것(앱이 손바닥 가운데에 잠깐 띄운다, id가 바뀌면 새 입력) 또는 null,
+   "mode": "free"(자유 타이핑) | "words"(단어 타이핑),
+   "word": 단어 모드일 때 {"target": 지금 칠 단어(맞혔으면 그 단어) 또는 null(건너뛰고 쉬는 중),
+           "solved": 맞혀서 "다음 단어"(next)를 기다리는 중인가, "matched": 입력 칸 앞에서부터 맞은 글자 수,
+           "last": [직전 단어, "done"|"skip"] 또는 null, "done": 다 친 단어 수, "skipped": 건너뛴 수,
+           "seconds": 다 친 단어의 평균 시간(초) 또는 null}, 자유 모드면 null,
    "log": 기록 파일 경로 또는 null}
-command(JSON): {"cmd": "clear" | "log_start" | "log_stop" | "demo" | "info" | "settings"} — 결과는 step 출력과 같은
-  모양(+ "notice", "settings").
+command(JSON): {"cmd": "clear" | "log_start" | "log_stop" | "demo" | "info" | "settings" | "mode" | "skip" | "next"} — 결과는
+  step 출력과 같은 모양(+ "notice", "settings").
+  mode: {"cmd": "mode", "mode": "free" | "words"}. 단어 모드는 SHORT_WORDS를 무작위 순서로 하나씩 낸다(WordCollector,
+  Mac --collect-set words와 같은 판정: 입력 칸이 그 단어가 되면 맞힌 것). 맞히면 저절로 넘어가지 않고 "next"를 기다린다
+  (앱은 창을 초록으로 하고 "다음 단어" 버튼을 띄운다, 2026-10-23 사용자). 모드를 바꾸면
+  입력 칸을 비우고, 기록 중이면 새 기록 파일을 연다(단어 모드 기록은 첫 줄에 단어 순서, 행마다 지금 단어 → pinch_eval.py).
+  next: 맞힌 뒤 입력 칸을 비우고 다음 단어. skip: 지금 단어를 건너뛴다(맞힌 뒤면 next와 같다).
+  clear: 단어 모드에서는 지금 단어를 처음부터 다시 친다.
   settings: {"cmd": "settings", "values": {"hold", "settle", "index_sweep", "occlusion": 참/거짓}} 판정 규칙 켜기·끄기
   (Vision Pro 설정 창). hold = 꼬집고 HOLD_SECONDS초 머물러야 입력, settle = 손을 뒤집은 직후 SETTLE초 무시,
   index_sweep = 오른손 검지 지나감 규칙, occlusion = 엄지 가림(기울기) 규칙. 바꾸면 진행 중인 접촉은 버린다.
@@ -43,6 +54,7 @@ import time
 from types import SimpleNamespace
 
 from common.pose import pose_from_image
+from pinch_collect import SHORT_WORDS, WordCollector
 from pinch_typer import (DRAG_MIN, DRAG_STROKES, KEYS, OCCLUDED_ROLL, SETTLE, VOWEL_LABELS, PinchTyper, cycle_queue,
                          group_of, hand_signal, key_label, replay)
 
@@ -75,6 +87,12 @@ class Session:
         self.log, self.log_path = None, None
         self.signals = {}
         self.now = 0.0
+        self.collector = None  # 단어 모드의 WordCollector(자유 모드면 None)
+        self.clear_next = False  # 다음 단어를 시작할 때 입력 칸을 비울지
+        self.last_result = None  # 직전 단어 결과 [단어, "done"|"skip"]
+        self.shown_at = {}  # 단어 번호 → 처음 안내한 시각
+        self.durations = []  # 다 친 단어마다 걸린 시간(초)
+        self.solved = None  # 맞혀서 "다음 단어"를 기다리는 단어
 
     # -- 프레임 ------------------------------------------------------------
     def step(self, payload):
@@ -82,10 +100,75 @@ class Session:
         now, hands = data["t"], data.get("hands") or {}
         self.now = now
         self.signals = {label: signal_of(label, hands[label]) for label in HANDS if hands.get(label)}
+        waiting = self.collector is not None and self.solved is None  # 단어를 치는 중(맞혔으면 다음 단어를 기다림)
+        prompt = self.collector.prompt(now) if waiting else None
+        if prompt is not None and self.clear_next:
+            # 새 단어: 직전 단어의 입력을 지우고 쉬는 동안 시작된 접촉을 버린다(Mac run과 같다).
+            self._clear_input()
+            self.clear_next = False
+        if prompt is not None:
+            self.shown_at.setdefault(prompt[0], now)
         events = self.typer.update({label: self.signals.get(label) for label in HANDS}, now)
+        if waiting:
+            finished = self.collector.update(self.typer.pinches, now, self.typer.ime.text)
+            events += finished
+            if finished:
+                self._finished(finished[-1], now)
         if self.log is not None:
-            self._write(now, hands, events)
+            self._write(now, hands, events, None if prompt is None else self.collector.describe(prompt))
         return json.dumps(self.state(events), ensure_ascii=False)
+
+    # -- 단어 모드 ---------------------------------------------------------
+    def _clear_input(self):
+        self.typer.ime.clear()
+        self.typer.pending = None
+        for hand in self.typer.hands.values():
+            hand.pinch.lost()
+            hand.contact = None
+            hand.held = []
+
+    def _finished(self, event, now):
+        """단어 하나가 끝났다(event = ("collect", 번호, 단어, "done"|"skip"))."""
+        _, number, word, result = event
+        if result == "done" and number in self.shown_at:
+            self.durations.append(now - self.shown_at[number])
+        self.last_result = [word, result]
+        if result == "done":
+            self.solved = word  # 맞힘: "다음 단어"(next)를 기다린다
+        else:
+            self.clear_next = True
+
+    def next_word(self):
+        """맞힌 단어에서 다음 단어로: 입력 칸을 비우고 바로 다음 단어를 낸다(쉬는 시간 없이)."""
+        self.solved, self.clear_next = None, False
+        self.collector.resting_until = None
+        self._clear_input()
+
+    def set_mode(self, mode):
+        if mode not in ("free", "words"):
+            raise ValueError(f"알 수 없는 모드: {mode}")
+        self.collector = WordCollector.shuffled(SHORT_WORDS, seed=time.time_ns()) if mode == "words" else None
+        self.clear_next, self.last_result, self.shown_at, self.durations = False, None, {}, []
+        self.solved = None
+        self._clear_input()
+        if self.log is not None:  # 모드마다 기록 파일을 나눈다(단어 모드 기록은 첫 줄이 단어 순서)
+            self.start_log()
+
+    def word_state(self):
+        if self.collector is None:
+            return None
+        prompt = None if self.solved else self.collector.prompt(self.now)
+        target = self.solved or (None if prompt is None else prompt[1])
+        text = self.typer.ime.text
+        matched = 0
+        if target is not None:
+            while matched < min(len(text), len(target)) and text[matched] == target[matched]:
+                matched += 1
+        results = self.collector.results.values()
+        return {"target": target, "solved": self.solved is not None, "matched": matched, "last": self.last_result,
+                "done": sum(result == "done" for result in results),
+                "skipped": sum(result == "skip" for result in results),
+                "seconds": round(sum(self.durations) / len(self.durations), 1) if self.durations else None}
 
     def state(self, events=(), notice=None):
         typer = self.typer
@@ -126,6 +209,7 @@ class Session:
                 "group": group, "group_index": None if pending is None else (pending.count - 1) % len(group),
                 "hold_mode": bool(typer.hands["Left"].pinch.hold), "hands": hands,
                 "echo": None if typer.echo is None else dict(zip(("id", "hand", "text"), typer.echo)),
+                "mode": "free" if self.collector is None else "words", "word": self.word_state(),
                 "settings": self.settings(),
                 "log": None if self.log_path is None else str(self.log_path), "notice": notice}
 
@@ -136,6 +220,16 @@ class Session:
         if cmd == "clear":
             self.typer.ime.clear()
             self.typer.pending = None
+        elif cmd == "mode":
+            self.set_mode(json.loads(payload).get("mode"))
+        elif cmd == "next" or (cmd == "skip" and self.solved is not None):
+            if self.solved is not None:
+                self.next_word()
+        elif cmd == "skip":
+            if self.collector is not None:
+                skipped = self.collector.skip(self.now)
+                if skipped:
+                    self._finished(skipped[-1], self.now)
         elif cmd == "log_start":
             notice = self.start_log()
         elif cmd == "log_stop":
@@ -185,8 +279,11 @@ class Session:
         old = sorted(self.log_dir.glob("pinch-log-visionos-*.jsonl"))
         for path in old[:max(0, len(old) - (LOG_KEEP - 1))]:  # 새 파일까지 LOG_KEEP개
             path.unlink()
-        self.log_path = self.log_dir / f"pinch-log-visionos-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
+        stamp = time.strftime('%Y%m%d-%H%M%S')
+        self.log_path = self.log_dir / f"pinch-log-visionos-{stamp}{'-words' if self.collector else ''}.jsonl"
         self.log = open(self.log_path, "a", encoding="utf-8")
+        if self.collector is not None:  # 단어 모드: 첫 줄에 단어 순서(pinch_eval.read_config)
+            self.log.write(json.dumps(self.collector.config(), ensure_ascii=False) + "\n")
         return "기록 시작: " + self.log_path.name
 
     def stop_log(self):
@@ -197,7 +294,7 @@ class Session:
         self.log, self.log_path = None, None
         return "기록 끝: " + name
 
-    def _write(self, now, hands, events):
+    def _write(self, now, hands, events, prompt=None):
         def rounded(rows, digits):
             return [[round(v, digits) for v in row] for row in rows]
         row = {"t": round(now, 4), "size": [1, 1], "source": "visionos",
@@ -207,4 +304,6 @@ class Session:
                                  "world": rounded(hands[label]["world"], 5)}
                          for label, sig in self.signals.items()},
                "events": [list(event) for event in events]}
+        if self.collector is not None:  # 단어 모드: 이 프레임에 안내 중인 단어(쉬는 중이면 null), Mac log_row와 같다
+            row["prompt"] = prompt
         self.log.write(json.dumps(row, ensure_ascii=False) + "\n")

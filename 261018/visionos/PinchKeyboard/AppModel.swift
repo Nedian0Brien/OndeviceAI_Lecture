@@ -14,7 +14,6 @@ final class AppModel {
     var state = PinchState()
     var status = "준비 중"
     var handsRunning = false
-    var showMap = false  // 자판 지도(Mac의 K)
     /// 손(팔) 가림. 혼합 몰입에서 .visible은 깊이와 관계없이 손이 항상 위(라벨이 손에 가려짐), .hidden은 가상 콘텐츠가
     /// 항상 손 위, .automatic은 깊이에 따라 정한다(WWDC24 "Render Metal with passthrough in visionOS"). 시스템이 따르지
     /// 않을 수 있는 요청이라 기기에서 고를 수 있게 둔다. 기본은 Mac처럼 HUD를 손 위에 그리는 .hidden.
@@ -84,11 +83,20 @@ final class AppModel {
     }
 
     func command(_ name: String) async {
+        await send(#"{"cmd": "\#(name)"}"#)
+    }
+
+    /// 자유 타이핑("free") / 단어 타이핑("words"). 단어 모드는 짧은 단어를 무작위로 하나씩 낸다(pinch_vision).
+    func setMode(_ mode: String) async {
+        await send(#"{"cmd": "mode", "mode": "\#(mode)"}"#)
+    }
+
+    private func send(_ json: String) async {
         await prepare()
         guard pythonReady else {
             return
         }
-        apply(await engine.call("command", #"{"cmd": "\#(name)"}"#))
+        apply(await engine.call("command", json))
     }
 
     func startHands() async {

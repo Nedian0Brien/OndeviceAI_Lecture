@@ -74,8 +74,21 @@ struct PinchState: Decodable {
         var text: String
     }
 
+    /// 단어 타이핑 모드 상태(pinch_vision.Session.word_state).
+    struct WordState: Decodable {
+        var target: String?  // 지금 칠 단어(맞혔으면 그 단어, 건너뛰고 쉬는 중이면 nil)
+        var solved: Bool  // 맞혀서 "다음 단어"를 기다리는 중
+        var matched: Int  // 입력 칸 앞에서부터 맞은 글자 수
+        var last: [String]?  // [직전 단어, "done" | "skip"]
+        var done: Int
+        var skipped: Int
+        var seconds: Double?  // 다 친 단어의 평균 시간(초)
+    }
+
     var text: String?
     var echo: Echo?
+    var mode: String?  // "free" | "words"
+    var word: WordState?
     var pending: Bool?
     var pendingPunct: Bool?
     var group: [String]?

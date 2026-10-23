@@ -11,7 +11,7 @@ struct PinchKeyboardApp: App {
             ContentView()
                 .environment(model)
         }
-        .defaultSize(width: 900, height: 520)
+        .defaultSize(width: 760, height: 620)
 
         WindowGroup(id: Self.settingsID) {
             SettingsView()

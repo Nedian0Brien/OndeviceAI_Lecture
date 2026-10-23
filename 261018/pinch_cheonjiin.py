@@ -1,7 +1,7 @@
-"""손끝 꼬집기 횟수로 고르는 양손 천지인 입력기 + 손등 마우스 (1인칭 카메라 기준).
+"""손끝 꼬집기 횟수로 고르는 양손 천지인 입력기 (1인칭 카메라 기준).
 
-카메라를 눈 위치에 두고 손을 내려다본다. 손바닥이 카메라를 향하면 키보드, 오른손을 뒤집어 손등이 보이면 마우스다.
-자판과 규칙은 pinch_typer.py 머리말을 본다.
+카메라를 눈 위치에 두고 손을 내려다본다. 손바닥이 카메라를 향하면 기본 자판, 손을 뒤집어 손등이 보이면
+왼손은 편집 키, 오른손은 아랫줄 자판이다. 자판과 규칙은 pinch_typer.py 머리말을 본다.
 
 실행:  python 261018/pinch_cheonjiin.py --camera 0
 시연:  python 261018/pinch_cheonjiin.py --demo
@@ -9,7 +9,7 @@
 
 # 한 프레임의 처리 흐름 (run)
 #   카메라 프레임 → (--mirror면 좌우 반전) → 손 검출(가로 640 이하로 줄인 영상) → 왼손·오른손 배정
-#   → 손마다 HandSignal(꼬집기 비율·굽음·자세·손바닥 방향) → PinchTyper.update → 입력·마우스 이벤트
+#   → 손마다 HandSignal(꼬집기 비율·굽음·자세·손바닥 방향) → PinchTyper.update → 입력 이벤트
 #   → HUD 그리기 → 창 표시 → 키 입력 처리 · 진단 스크린샷
 # 판정 규칙은 모두 pinch_typer.py에 있고, 이 파일은 카메라·화면·키보드 단축키만 다룬다.
 
@@ -21,32 +21,37 @@ import shutil
 import subprocess
 import time
 
-from korean_ime import CONSONANTS
 from common.camera import FpsMeter, VideoClock, Window, capture_size, open_capture, parse_resolution, read_frame
 from common.cli import add_camera_arguments, positive_float, resolve_pipeline
 from common.hands import assign_hands, create_detector, detect_hands, detection_frame
 from common.hud import MUTED, WHITE, HudCanvas, ellipsize_left, hud_font, hud_text_width, load_fonts, \
-    rounded_rectangle, ui_scale
-from common.landmarks import DISTAL_SEGMENTS, FINGER_TIPS, HAND_CONNECTIONS, MIDDLE_MCP, THUMB_TIP, WRIST, to_pixels
+    rounded_rectangle
+from common.landmarks import (DISTAL_SEGMENTS, FINGER_MCPS, FINGER_TIPS, HAND_CONNECTIONS, MIDDLE_MCP, THUMB_TIP, WRIST,
+                              to_pixels)
 from common.pose import pose_from_image
-from pinch_typer import (LEFT_KEYS, PINCH_ENTER, PINCH_EXIT, RIGHT_KEYS, RIGHT_SHIFT_KEYS, VOWEL_LABELS, PinchTyper,
-                         group_of, hand_signal, key_label, replay)
+from pinch_collect import FINGER_NAMES, KINDS, Collector, WordCollector
+from pinch_typer import (HOLD_TIME, KEYS, PINCH_ENTER, PINCH_EXIT, PinchTyper, cycle_queue, group_of,
+                         hand_signal, key_label, replay)
 
 
 WINDOW = "Pinch Cheonjiin"
 FIXTURES = Path(__file__).resolve().with_name("fixtures") / "pinch-typer-keys.json"
-BUTTONS = (("save", "저장"), ("pause", "일시정지"), ("help", "도움말"))  # 오른쪽 위 버튼(마우스로 누른다)
-MENU = (("copy", "복사"), ("clear", "전체 지우기"), ("close", "닫기"))  # 우클릭 메뉴
+DATA = Path(__file__).resolve().with_name("data")
 ORIENTATION_NAMES = {"palm": "손바닥", "back": "손등", "turning": "회전 중", None: ""}
-# 키보드 시험용: 1~4 = 왼손 검지~소지, 7 8 9 0 = 오른손 검지~소지, Space = 왼손 주먹, Backspace = 오른손 주먹
-TEST_KEYS = {ord("1"): ("Left", 0), ord("2"): ("Left", 1), ord("3"): ("Left", 2), ord("4"): ("Left", 3),
-             ord("7"): ("Right", 0), ord("8"): ("Right", 1), ord("9"): ("Right", 2), ord("0"): ("Right", 3)}
+FACE_CAPTIONS = {"Left": "손등 편집", "Right": "손등 확정/공백"}  # 손등일 때 손 이름 옆 표시
+# 키보드 시험용: 1~4 = 왼손 검지~소지(2 = 모음 ㆍ), - = 모음 가로 끌기(ㅡ), / = 모음 세로 끌기(ㅣ),
+# 7 8 9 0 = 오른손 검지~소지, Shift를 누르면 손등(US 자판의 !@#$ / &*()), Space = 왼손 주먹, Backspace = 오른손 주먹
+TEST_KEYS = {ord(char): (hand, finger, face, None)
+             for chars, hand, face in (("1234", "Left", "palm"), ("!@#$", "Left", "back"),
+                                       ("7890", "Right", "palm"), ("&*()", "Right", "back"))
+             for finger, char in enumerate(chars)}
+TEST_KEYS.update({ord("-"): ("Left", 1, "palm", "h"), ord("/"): ("Left", 1, "palm", "v")})
 
 DIM = (200, 202, 210, 150)
-SHIFT_BLUE = (132, 186, 255, 255)
-MOUSE_GREEN = (126, 224, 176, 255)
+OK_GREEN = (126, 224, 176, 255)
 DELETE_RED = (255, 128, 116, 255)
 OUTLINE = (28, 29, 34, 170)  # 밝은 영상 위 글자 외곽선
+PROMPT_YELLOW = (255, 214, 102, 255)  # 기록 모드: 꼬집을 손끝
 
 
 # ---------------------------------------------------------------------------
@@ -67,47 +72,37 @@ def build_signals(hands, width, height, mirrored):
 # ---------------------------------------------------------------------------
 # 손끝 라벨
 
-def tip_text(typer, hand, finger):
-    """손끝 라벨. 자음 그룹은 첫 자모, 순환 중인 손가락은 현재 후보를 보여준다."""
-    if typer.mode == "mouse":
-        return ("이동" if hand == "Right" else "클릭") if finger == 0 else None
-    if hand == "Left":
-        key = LEFT_KEYS[finger]
-    else:
-        key = (RIGHT_SHIFT_KEYS if typer.shift else RIGHT_KEYS)[finger]
-        pending = typer.pending
-        if pending is not None and pending.finger == finger and not typer.shift:
-            return "줄" if pending.label == "\n" else pending.label
-    return {"SHIFT": "⇧", "PUNCT": "."}.get(key) or VOWEL_LABELS.get(key) or CONSONANTS[key][0]
+CYCLE_ANIM = 0.25  # 순환할 때 대기 글자가 한 칸 올라오는 시간(초)
 
 
-# ---------------------------------------------------------------------------
-# HUD 배치 (그리기와 마우스 클릭 판정이 같은 좌표를 쓴다)
-
-def button_rects(w, h):
-    """오른쪽 위 버튼들의 (키, 이름, 사각형)."""
-    s = ui_scale(w, h)
-    bw, bh, margin = 70 * s, 26 * s, 16 * s
-    return [(key, label, (w - margin - bw, margin + i * (bh + 6 * s), w - margin, margin + i * (bh + 6 * s) + bh))
-            for i, (key, label) in enumerate(BUTTONS)]
-
-
-def menu_rects(position, w, h):
-    """우클릭한 위치에 여는 메뉴 항목들의 (키, 이름, 사각형). 화면 밖으로 나가지 않게 민다."""
-    s = ui_scale(w, h)
-    mw, mh = 104 * s, 26 * s
-    x = min(max(position[0], 4), w - mw - 4)
-    y = min(max(position[1], 4), h - len(MENU) * (mh + 4 * s) - 4)
-    return [(key, label, (x, y + i * (mh + 4 * s), x + mw, y + i * (mh + 4 * s) + mh))
-            for i, (key, label) in enumerate(MENU)]
+def finger_path_point(points, finger, start, fraction):
+    """손가락 위 경로(손끝 라벨 자리 start → TIP → DIP → PIP → MCP)에서 길이 비율 fraction(0~1)의 점."""
+    mcp = FINGER_MCPS[finger]
+    path = [start] + [points[mcp + i] for i in (3, 2, 1, 0)]
+    lengths = [math.dist(a, b) for a, b in zip(path, path[1:])]
+    remaining = max(0.0, min(1.0, fraction)) * sum(lengths)
+    for (a, b), length in zip(zip(path, path[1:]), lengths):
+        if remaining <= length or length == 0 and remaining == 0:
+            k = remaining / length if length else 0.0
+            return a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k
+        remaining -= length
+    return path[-1]
 
 
-def hit(rects, point):
-    """point가 들어 있는 사각형의 키. 없으면 None."""
-    for key, _, (x1, y1, x2, y2) in rects:
-        if x1 <= point[0] <= x2 and y1 <= point[1] <= y2:
-            return key
-    return None
+def cycle_motion(cycles, slot, queue, now):
+    """순환 애니메이션 진행(0~1)과 직전 대기열. 대기열이 한 칸 돌았을 때만 움직이고, 그 밖의 변화는 바로 바꾼다.
+
+    cycles: 손가락별 (대기열, 바뀐 시각, 직전 대기열)을 담는 dict(ui["cycles"]).
+    """
+    old = cycles.get(slot)
+    if old is None or old[0] != queue:
+        turned = old is not None and len(queue) > 1 and old[0][1:] == queue[:-1]
+        cycles[slot] = (queue, now if turned else None, old[0] if turned else None)
+    queue, since, previous = cycles[slot]
+    if since is None or now - since >= CYCLE_ANIM:
+        return 1.0, None
+    linear = (now - since) / CYCLE_ANIM
+    return 1 - (1 - linear) ** 3, previous  # ease-out: 빠르게 출발해 부드럽게 멈춘다
 
 
 # ---------------------------------------------------------------------------
@@ -122,8 +117,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
     now = time.monotonic()
     margin = 16 * s
     pinch_enter, pinch_exit = typer.hands["Left"].pinch.enter, typer.hands["Left"].pinch.exit
-    mouse = typer.mode == "mouse"
-    cursor = (typer.cursor[0] * w, typer.cursor[1] * h)
+    collect = ui.get("collect")  # 기록 모드 안내(run의 collect_view), 없으면 None
 
     def write(position, text, font, fill, anchor="la", outline=False):
         canvas.write(position, text, font, fill, anchor, stroke if outline else 0, OUTLINE if outline else None)
@@ -134,56 +128,99 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         for a, b in HAND_CONNECTIONS:
             draw.line((points[a], points[b]), fill=(237, 242, 250, 95), width=stroke)
         caption = ("왼손" if label == "Left" else "오른손")
-        if state.orientation.state:
+        if state.orientation.state == "back":
+            caption += " · " + FACE_CAPTIONS[label]
+        elif state.orientation.state:
             caption += " · " + ORIENTATION_NAMES[state.orientation.state]
         if not state.pinch.armed:
             caption += " · 손을 펴세요"
         x, y = points[WRIST]
-        write((min(max(x, 40 * s), w - 40 * s), min(y + 12 * s, h - 20 * s)), caption, small, MUTED, "ma", True)
+        occluded = typer.occluded(label)  # 소지 쪽으로 기울어 엄지가 가려짐: 이 자세의 꼬집기는 입력하지 않는다.
+        x, y = min(max(x, 40 * s), w - 40 * s), min(y + 12 * s, h - (44 if occluded else 20) * s)
+        write((x, y), caption, small, MUTED, "ma", True)
+        if occluded:
+            write((x, y + 22 * s), "엄지 쪽을 카메라로 돌려 주세요", small, PROMPT_YELLOW, "ma", True)
         # 손끝 라벨: 손가락 끝마디 방향으로 손끝 바로 바깥에 둔다(엄지가 닿는 면을 가리지 않게).
         tips = [points[tip] for tip in FINGER_TIPS]
         spacing = min(math.dist(a, b) for a, b in zip(tips, tips[1:]))
         diameter = min(26 * s, max(15 * s, spacing * 0.9))
         values = None if state.signal is None else state.signal.ratios
+        progresses = [0.0] * 4 if values is None else state.pinch.progress(values)
         for finger in range(4):
             tx, ty = tips[finger]
             dx, dy = tx - points[DISTAL_SEGMENTS[finger][0]][0], ty - points[DISTAL_SEGMENTS[finger][0]][1]
             norm = math.hypot(dx, dy) or 1.0
             cx, cy = tx + dx / norm * diameter * 0.85, ty + dy / norm * diameter * 0.85
-            # 꼬집기 진행: 떼기 기준(exit)에서 0, 접촉 기준(enter)에서 1
-            progress = 0.0 if values is None else min(1.0, max(0.0, (pinch_exit - values[finger])
-                                                                / (pinch_exit - pinch_enter)))
+            progress = progresses[finger]  # 꼬집기 진행: 기준값보다 다가온 정도(pinch_typer.FingerPinch.progress)
             active = state.pinch.active == finger
-            text = tip_text(typer, label, finger)
-            color = MOUSE_GREEN if mouse else WHITE
+            target = collect is not None and collect["target"] == (label, finger)
+            queue = cycle_queue(typer, label, finger)
+            text = queue[0] if queue else None
+            color = WHITE
+            if ui["tip_labels"] and len(queue) > 1:
+                # 순환 대기열: 다음 글자들은 손가락을 따라 손바닥 마디(MCP) 쪽에서 기다리고, 순환하면 한 칸씩 올라온다.
+                eased, previous = cycle_motion(ui.setdefault("cycles", {}), (label, finger), tuple(queue), now)
+                waiting = len(queue) - 1
+
+                def slot_fraction(slot):
+                    return slot / waiting
+
+                small_d = diameter * 0.7
+                wait_font = hud_font(fonts[1], max(8, round(small_d * 0.6)))
+                for slot in range(len(queue) - 1, 0, -1):
+                    fraction = slot_fraction(slot)
+                    if previous is not None and slot < waiting:  # 한 칸 아래 자리에서 올라오는 중
+                        fraction = slot_fraction(slot + 1) + (fraction - slot_fraction(slot + 1)) * eased
+                    wx, wy = finger_path_point(points, finger, (cx, cy), fraction)
+                    if previous is not None and slot == waiting:  # 마지막 자리는 손바닥 마디에서 나타난다
+                        alpha = round(230 * eased / 16) * 16
+                        write((wx, wy), queue[slot], wait_font, WHITE[:3] + (alpha,), "mm", True)
+                        continue
+                    glass((wx - small_d / 2, wy - small_d / 2, wx + small_d / 2, wy + small_d / 2), circle=True)
+                    write((wx, wy), queue[slot], wait_font, WHITE[:3] + (215,), "mm")
+                if previous is not None:
+                    # 방금 입력된 글자: 손끝에서 조금 올라가며 사라진다. 다음 글자는 한 칸 아래에서 손끝으로 올라온다.
+                    lift = diameter * 0.8 * eased
+                    alpha = round(255 * (1 - eased) / 16) * 16
+                    write((cx + dx / norm * lift, cy + dy / norm * lift), previous[0],
+                          hud_font(fonts[1], max(8, round(diameter * 0.55))), WHITE[:3] + (alpha,), "mm", True)
+                    cx, cy = finger_path_point(points, finger, (cx, cy), slot_fraction(1) * (1 - eased))
             if ui["tip_labels"] and text:
                 width = max(diameter, hud_text_width(text, small) + 10 * s)
                 bounds = (cx - width / 2, cy - diameter / 2, cx + width / 2, cy + diameter / 2)
-                shifted = label == "Right" and typer.shift and not mouse
                 glass(bounds, circle=width == diameter, hover=progress > 0.5, pressed=active,
-                      tint=SHIFT_BLUE if shifted or (text == "⇧" and typer.shift) else None)
-                ink = (28, 29, 34, 255) if active else (SHIFT_BLUE if shifted else color)
+                      tint=PROMPT_YELLOW if target else None)
+                ink = (28, 29, 34, 255) if active or target else color
                 write((cx, cy), text, hud_font(fonts[1], max(8, round(diameter * 0.55))) if len(text) == 1 else small,
                       ink, "mm")
+            if target:
+                canvas.ring((cx, cy), diameter * 0.8, PROMPT_YELLOW, min_width=2)
             if progress > 0 and not active:
                 canvas.progress_arc((tx, ty), 6 * s, progress, color, max(2, round(2 * s)))
+            if active and values is not None:
+                canvas.ring((cx, cy), diameter * 0.72, (237, 242, 250, 90), min_width=2)
+                if state.pinch.hold:
+                    # 누르고 유지 진행: 손끝에 머문 시간. 다 차면 입력되고, 뗄 때까지 꽉 찬 원으로 남는다.
+                    held = state.pinch.hold_progress(now)
+                    if held > 0:
+                        canvas.progress_arc((cx, cy), diameter * 0.72, held, OK_GREEN, max(2, round(3 * s)))
+                else:
+                    # 떼기 진행(뗄 때 입력 방식): 눌린 손끝을 얼마나 벌렸는지. 다 차면 입력된다.
+                    opened = state.pinch.release_progress(values)
+                    if opened > 0:
+                        canvas.progress_arc((cx, cy), diameter * 0.72, opened, OK_GREEN, max(2, round(3 * s)))
             if ui["debug"] and values is not None:
                 write((tx - dx / norm * 12 * s, ty - dy / norm * 12 * s),
                       f"{values[finger]:.2f}", small, WHITE if values[finger] < pinch_enter else DIM, "mm", True)
         thumb = points[THUMB_TIP]
         r = 3 * s
         draw.ellipse((thumb[0] - r, thumb[1] - r, thumb[0] + r, thumb[1] + r), fill=(245, 248, 252, 200))
-        if state.fist.progress > 0 and not mouse:
-            # 주먹 진행: 손목~중지 뿌리 가운데에 호. 오른손은 지움(빨강), 왼손은 확정/공백.
+        if state.fist.progress > 0:
+            # 주먹 진행: 손목~중지 뿌리 가운데에 호(양손 모두 지움). 쥐고 있으면 다음 지움까지의 진행이다.
             cx = (points[WRIST][0] + points[MIDDLE_MCP][0]) / 2
             cy = (points[WRIST][1] + points[MIDDLE_MCP][1]) / 2
-            color = DELETE_RED if label == "Right" else WHITE
-            canvas.progress_arc((cx, cy), 22 * s, state.fist.progress, color, max(2, round(3 * s)))
-            if label == "Right":
-                text = "지움"
-            else:
-                text = "확정" if typer.pending is not None else "공백"
-            write((cx, cy), text, small, color, "mm", True)
+            canvas.progress_arc((cx, cy), 22 * s, state.fist.progress, DELETE_RED, max(2, round(3 * s)))
+            write((cx, cy), "지움", small, DELETE_RED, "mm", True)
 
     # 위: 입력 한 줄 캡슐. 확정 전 후보 글자 아래에 밑줄.
     text = typer.ime.text.split("\n")[-1]
@@ -198,7 +235,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
     if text and typer.pending is not None and typer.pending.key != "PUNCT":
         last = hud_text_width(shown[-1:], font)
         draw.line((text_right - last, margin + height - 9 * s, text_right, margin + height - 9 * s),
-                  fill=SHIFT_BLUE if typer.pending.key in RIGHT_SHIFT_KEYS else WHITE, width=max(2, round(2 * s)))
+                  fill=WHITE, width=max(2, round(2 * s)))
     elif text and int(now * 2) % 2 == 0 and not ui["paused"]:  # 0.5초 간격 깜빡이는 커서
         draw.line((text_right + 4 * s, margin + 12 * s, text_right + 4 * s, margin + height - 12 * s),
                   fill=MUTED, width=stroke)
@@ -214,41 +251,34 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
             write((x + (i + 0.5) * cell, row_y + cell / 2), char, normal,
                   WHITE if i == current else DIM, "mm", True)
 
-    # 왼쪽 위: 모드와 쉬프트
-    chip_y = margin
-    mode_text = ("마우스" + (" · OS" if ui["os_mouse"] else "")) if mouse else "키보드"
-    chip_w = hud_text_width(mode_text, small) + 24 * s
-    glass((margin, chip_y, margin + chip_w, chip_y + 24 * s), tint=MOUSE_GREEN if mouse else None)
-    write((margin + chip_w / 2, chip_y + 12 * s), mode_text, small, WHITE, "mm")
-    if typer.shift:
-        chip_y += 30 * s
-        shift_w = hud_text_width("⇧ 아랫줄", small) + 24 * s
-        glass((margin, chip_y, margin + shift_w, chip_y + 24 * s), tint=SHIFT_BLUE)
-        write((margin + shift_w / 2, chip_y + 12 * s), "⇧ 아랫줄", small, WHITE, "mm")
-
-    # 오른쪽 위: 버튼 (마우스 모드에서 가상 커서로 누른다)
-    for key, label, bounds in button_rects(w, h):
-        hover = mouse and not ui["os_mouse"] and ui["menu"] is None and hit([(key, label, bounds)], cursor)
-        title = "재개" if key == "pause" and ui["paused"] else label
-        glass(bounds, hover=hover, pressed=hover and typer.button_down)
-        write(((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2), title, small, WHITE, "mm")
-
     # 아래: 자판 지도(K). 손에 라벨을 붙이지 않고 패널로 보여준다(visionOS에서도 같은 원칙).
-    if ui["show_map"] and not mouse:
+    if ui["show_map"]:
         cell_w, cell_h, gap = 50 * s, 28 * s, 5 * s
         top = h - margin - cell_h
-        for hand, keys, center in (("Left", LEFT_KEYS, w * 0.27),
-                                   ("Right", RIGHT_SHIFT_KEYS if typer.shift else RIGHT_KEYS, w * 0.73)):
-            state = typer.hands[hand]
+        for hand, center in (("Left", w * 0.27), ("Right", w * 0.73)):
+            state, face = typer.hands[hand], typer.face(hand) or "palm"
             start = center - (4 * cell_w + 3 * gap) / 2
+            keys = KEYS[(hand, face)]
             for i, key in enumerate(keys):
+                if key is None:  # 자판에 없는 자리(오른손 손등 중지~소지)
+                    continue
                 bounds = (start + i * (cell_w + gap), top, start + i * (cell_w + gap) + cell_w, top + cell_h)
-                active = state.pinch.active == i and state.orientation.state == "palm"
-                glass(bounds, hover=active, tint=SHIFT_BLUE if (key == "SHIFT" and typer.shift) else None)
-                ink = SHIFT_BLUE if hand == "Right" and typer.shift else WHITE
+                glass(bounds, hover=state.pinch.active == i)
+                ink = WHITE
                 name = key_label(key)
                 write(((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2), name,
                       normal if len(name) <= 3 and key != "PUNCT" else small, ink, "mm")
+
+    # 기록 모드: 입력 칸 아래에 꼬집을 손가락과 진행
+    if collect is not None:
+        title_font = large
+        pw = min(w - 2 * margin, max(hud_text_width(collect["title"], title_font),
+                                     hud_text_width(collect["detail"], small)) + 40 * s)
+        top = row_y + 30 * s
+        glass(((w - pw) / 2, top, (w + pw) / 2, top + 62 * s), tint=PROMPT_YELLOW if collect["target"] else None)
+        tone = {"ok": OK_GREEN, "wrong": DELETE_RED}.get(collect["tone"], WHITE)
+        write((w / 2, top + 22 * s), collect["title"], title_font, tone, "mm", True)
+        write((w / 2, top + 47 * s), collect["detail"], small, MUTED, "mm", True)
 
     # 안내: 상태가 달라질 때만
     message = ""
@@ -260,19 +290,9 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         message = ui["status"]
     if message and not ui["show_help"]:
         mw = min(w - 2 * margin, hud_text_width(message, small) + 28 * s)
-        top = h - (ui["show_map"] and not mouse and 92 or 58) * s  # 자판 지도가 있으면 그 위에
+        top = h - (ui["show_map"] and 92 or 58) * s  # 자판 지도가 있으면 그 위에
         glass(((w - mw) / 2, top, (w + mw) / 2, top + 26 * s))
         write((w / 2, top + 13 * s), message, small, MUTED, "mm")
-
-    # 마우스 모드: 우클릭 메뉴와 가상 커서
-    if ui["menu"] is not None:
-        for key, label, bounds in menu_rects(ui["menu"], w, h):
-            hover = hit([(key, label, bounds)], cursor)
-            glass(bounds, hover=hover)
-            write((bounds[0] + 12 * s, (bounds[1] + bounds[3]) / 2), label, small, WHITE, "lm")
-    if mouse and not ui["os_mouse"]:
-        canvas.ring(cursor, 8 * s, MOUSE_GREEN, fill=MOUSE_GREEN[:3] + (150,) if typer.button_down else None,
-                    min_width=2)
 
     if ui["show_help"]:
         draw.rectangle((0, 0, w, h), fill=(16, 17, 21, 165))
@@ -288,49 +308,19 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
 
 HELP_LINES = [
     "손끝 꼬집기 천지인",
-    "손바닥을 카메라 쪽으로 · 같은 손가락 반복 = 순환 · 다른 버튼 = 자동 확정",
-    "왼손: ㅣ ㆍ ㅡ ⇧(소지, 다음 자음 하나만 아랫줄)",
-    "오른손: ㄱㅋㄲ ㄴㄹ ㄷㅌㄸ ㅇㅁ  ·  ⇧: ㅂㅍㅃ ㅅㅎㅆ ㅈㅊㅉ .,?!줄바꿈",
-    "왼손 주먹: 후보 확정 / 없으면 공백  ·  오른손 주먹: 지움",
-    "오른손 손등: 마우스 · 오른손 검지 꼬집어 이동 · 왼손 손등 꼬집기 1회 좌 / 2회 우 / 유지 누름",
-    "키보드 시험: 1~4 왼손 검지~소지 · 7 8 9 0 오른손 · Space 왼손 주먹 · Backspace 오른손 주먹",
+    "같은 손가락 반복 = 순환(대기 글자가 손끝으로 올라옴) · 다른 키 = 자동 확정",
+    "왼손 손바닥: ㅂㅍㅃ · 모음 · ㅅㅎㅆ · ㅈㅊㅉ  ·  모음(중지): 꼬집기 ㆍ, 꼬집은 채 가로로 끌기 ㅡ, 세로로 끌기 ㅣ",
+    "오른손 손바닥: ㄱㅋㄲ ㄴㄹ ㄷㅌㄸ ㅇㅁ  ·  왼손 손등: 지움 · 공백 · 확정 · .,?!줄바꿈",
+    "오른손 손등 검지: 확정/공백(후보가 있으면 확정, 없으면 공백)",
+    "주먹(양손): 마지막 자모 지움(감 → 가 → ㄱ), 쥐고 있으면 0.5초마다 계속",
+    "키보드 시험: 1~4 왼손(- 가로 끌기, / 세로 끌기) · 7 8 9 0 오른손 · Shift와 함께 손등 · Space/Backspace 주먹(지움)",
     "T 손끝 라벨 · K 자판 지도 · D 진단 수치(꼬집기 거리) · [ ] 꼬집기 판정 거리",
-    "P 일시정지 · S 저장 · G 스크린샷 · F 전체 화면 · H 닫기 · Q 종료",
+    "C 복사 · X 전체 지우기 · P 일시정지 · S 저장 · G 스크린샷 · F 전체 화면 · H 닫기 · Q 종료",
 ]
 
 
-# ---------------------------------------------------------------------------
-# OS 마우스 (B)
-
-class OsMouse:
-    """가상 커서 대신 실제 OS 마우스를 움직인다. macOS는 터미널 앱에 손쉬운 사용 권한이 필요하다."""
-
-    def __init__(self, scale):
-        try:
-            from pynput.mouse import Button, Controller
-        except ImportError as exc:
-            raise RuntimeError("--os-mouse에는 pynput이 필요합니다: python -m pip install pynput") from exc
-        self.mouse, self.button, self.scale = Controller(), Button, scale
-        self.rest = [0.0, 0.0]  # 1px보다 작은 이동을 모아 둔다
-
-    def handle(self, event):
-        kind = event[0]
-        if kind == "move":
-            self.rest = [self.rest[0] + event[1] * self.scale, self.rest[1] + event[2] * self.scale]
-            dx, dy = int(self.rest[0]), int(self.rest[1])
-            if dx or dy:
-                self.mouse.move(dx, dy)
-                self.rest = [self.rest[0] - dx, self.rest[1] - dy]
-        elif kind == "click":
-            self.mouse.click(self.button.left if event[1] == "left" else self.button.right)
-        elif kind == "down":
-            self.mouse.press(self.button.left)
-        elif kind == "up":
-            self.mouse.release(self.button.left)
-
-
 def annotate_snapshot(cv2, image, hands, signals, typer, w, h):
-    """진단용 스크린샷에 손별 판정값을 ASCII로 덧붙인다: 역할(MediaPipe 라벨) / facing / 방향 / 모드."""
+    """진단용 스크린샷에 손별 판정값을 ASCII로 덧붙인다: 역할(MediaPipe 라벨) / facing / 방향 / 최소 비율."""
     out = image.copy()
     for role, hand in hands.items():
         signal = signals.get(role)
@@ -339,9 +329,91 @@ def annotate_snapshot(cv2, image, hands, signals, typer, w, h):
         text = f"{role}(mp:{hand.label}) f{signal.facing:+.2f} {state} min{min(signal.ratios):.2f}"
         for color, width in (((0, 0, 0), 3), ((0, 255, 255), 1)):
             cv2.putText(out, text, (max(4, x - 120), min(h - 8, y + 34)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, width)
-    cv2.putText(out, f"mode={typer.mode} t={time.strftime('%H:%M:%S')}", (8, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+    cv2.putText(out, f"t={time.strftime('%H:%M:%S')}", (8, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5,
                 (0, 255, 255), 1)
     return out
+
+
+def log_row(now, typer, hands, signals, events, w, h, collecting=False, prompt=None, frame=None):
+    """--log의 한 줄(프레임 하나). 상태 머신 재생에는 ratios·facing·pose·curled만 쓴다.
+
+    image(정규화 x, y, z)와 world(m) landmark는 판정 방식을 바꿀 때 다시 계산해 보려고 남긴다.
+    world 비율이 화면에서 보이는 거리와 어긋나는 자세를 찾는 데 쓴다(2026-10-22 약지→검지 오입력 조사).
+    size는 이미지 좌표를 픽셀로 바꿀 때의 프레임 크기다.
+    collecting이면(--collect) prompt 필드를 넣는다: 이 프레임에 안내 중인 정답 (id, 손, 손가락, 방향), 쉬는 중이면 null.
+    frame: --save-video로 함께 저장한 영상 안의 프레임 번호(0부터). 영상을 저장하지 않으면 필드가 없다.
+    """
+    def points(landmarks, digits):
+        return [[round(p.x, digits), round(p.y, digits), round(p.z, digits)] for p in landmarks]
+
+    row = {
+        "t": round(now, 4), "size": [w, h],
+        "hands": {role: {"seen_as": hands[role].label,
+                         "ratios": [round(v, 4) for v in sig.ratios], "facing": round(sig.facing, 3),
+                         "roll": round(sig.roll, 1),
+                         "pose": sig.pose, "curled": list(sig.curled),
+                         "image": points(hands[role].landmarks, 4), "world": points(hands[role].world, 5)}
+                  for role, sig in signals.items()},
+        "events": [list(e) for e in events]}
+    if collecting:  # prompt: Collector.describe 결과(dict) 또는 손가락 차례 튜플
+        if prompt is not None and not isinstance(prompt, dict):
+            prompt = dict(zip(Collector.FIELDS, prompt))
+        row["prompt"] = prompt
+    if frame is not None:
+        row["frame"] = frame
+    return row
+
+
+def open_video(cv2, log_path, fps, size):
+    """--save-video: 로그 옆 같은 이름의 .mp4(mp4v)를 연다. 열리지 않으면 .avi(MJPG)로 다시 시도한다.
+
+    Jetson의 OpenCV 빌드에 mp4v 인코더가 없을 수 있어서다. (writer, 경로)를 돌려준다.
+    """
+    for suffix, codec in ((".mp4", "mp4v"), (".avi", "MJPG")):
+        path = Path(log_path).with_suffix(suffix)
+        writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*codec), fps, size)
+        if writer.isOpened():
+            return writer, path
+        writer.release()
+    raise RuntimeError("영상 파일을 열 수 없습니다(mp4v, MJPG 모두 실패): " + str(log_path))
+
+
+def collect_view(collector, prompt, last):
+    """기록 모드 안내 패널의 내용(draw_hud의 ui["collect"]). prompt: 지금 차례, last: 직전 결과 이벤트."""
+    if isinstance(collector, WordCollector):
+        return word_view(collector, prompt, last)
+    if prompt is not None:
+        number, hand, finger, face = prompt
+        name = key_label(KEYS[(hand, face)][finger])
+        return {"target": (hand, finger), "tone": "prompt",
+                "title": f"{collector.label(hand, finger, face)} · {name}",
+                "detail": f"{number + 1} / {len(collector.order)} · {collector.round_of(number)}/{collector.reps}바퀴 · "
+                          "N 입력 안 됨 · B 직전 다시"}
+    if last is None:
+        return None
+    _, number, hand, finger, result = last[:5]
+    if result == "skip":
+        title, tone = "입력 안 됨 (건너뜀)", "skip"
+    elif result == "redo":
+        title, tone = "직전 차례를 다시 합니다", "skip"
+    elif result == finger:
+        title, tone = "맞음", "ok"
+    else:
+        title, tone = f"다른 손가락으로 입력됨: {FINGER_NAMES[result]}", "wrong"
+    return {"target": None, "tone": tone, "title": title, "detail": f"{number + 1} / {len(collector.order)}"}
+
+
+def word_view(collector, prompt, last):
+    """단어 기록 안내: 칠 단어와 진행. 다 치면(입력 칸이 단어와 같으면) 다음 단어로 넘어간다."""
+    if prompt is not None:
+        number, word = prompt
+        return {"target": None, "tone": "prompt", "title": f"「{word}」 입력",
+                "detail": f"{number + 1} / {len(collector.order)} · 틀리면 지우고 고쳐 치기 · N 건너뜀 · B 직전 다시"}
+    if last is None:
+        return None
+    _, number, word, result = last[:4]
+    title, tone = {"done": ("완료", "ok"), "skip": ("건너뜀", "skip"), "redo": ("직전 단어를 다시 칩니다", "skip")}[result]
+    return {"target": None, "tone": tone, "title": f"{title} · {word}", "detail": f"{number + 1} / {len(collector.order)}"}
 
 
 def copy_text(text):
@@ -373,14 +445,24 @@ def run(args):
     import cv2
 
     fonts = load_fonts(args.font)
-    typer = PinchTyper(enter=args.pinch_enter, exit=args.pinch_exit, fist_hold=args.fist_hold, gain=args.gain)
-    os_mouse = OsMouse(args.os_scale) if args.os_mouse else None
-    if os_mouse:
-        print("OS 마우스 모드: macOS에서는 시스템 설정 > 개인정보 보호 및 보안 > 손쉬운 사용에서 터미널을 허용하세요.")
-    # 화면 상태. draw_hud가 읽고, 단축키·마우스 버튼이 바꾼다.
-    ui = {"paused": False, "show_help": False, "show_map": False, "tip_labels": True, "debug": False, "menu": None,
-          "os_mouse": bool(os_mouse), "status": "", "notice_since": None, "help_lines": HELP_LINES}
+    typer = PinchTyper(enter=args.pinch_enter, exit=args.pinch_exit, fist_hold=args.fist_hold, hold=args.hold)
+    # 화면 상태. draw_hud가 읽고, 단축키가 바꾼다.
+    ui = {"paused": False, "show_help": False, "show_map": False, "tip_labels": True, "debug": False,
+          "status": "", "notice_since": None, "help_lines": HELP_LINES}
+    # 기록 모드: 꼬집을 손가락을 차례로 안내하고, 프레임마다 그 정답을 로그에 남긴다(pinch_collect.py).
+    collector = None
+    if args.collect and args.collect_set == "words":
+        collector = WordCollector(args.collect_reps or 1)
+    elif args.collect:
+        collector = Collector(args.collect_reps or 10, args.collect_set)
+    collect_last, collect_clear = None, False  # 직전 결과 이벤트, 다음 차례를 시작할 때 입력 칸을 비울지
+    if collector and args.log is None:
+        args.log = DATA / f"collect-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
     log = open(args.log, "a", encoding="utf-8") if args.log else None
+    video, video_frames = None, 0  # --save-video: 카메라 프레임 저장(학습·전처리 비교용), 저장한 프레임 수
+    if collector:
+        log.write(json.dumps(collector.config(), ensure_ascii=False) + "\n")
+        print(f"기록 모드({collector.kind}): {collector.reps}바퀴, {len(collector.order)}차례 → {args.log}", flush=True)
     # 진단 스크린샷: 1초마다(최근 40장 순환), 모드가 바뀔 때마다, G 키를 누를 때 저장한다.
     args.snapshots.mkdir(parents=True, exist_ok=True)
     print("스크린샷 저장 위치:", args.snapshots)
@@ -444,6 +526,13 @@ def run(args):
                 if args.mirror:
                     frame = cv2.flip(frame, 1)
                 h, w = frame.shape[:2]
+                frame_number = None
+                if args.save_video and log:  # HUD를 그리기 전 프레임. 로그 행의 frame으로 짝을 맞춘다.
+                    if video is None:
+                        video, video_path = open_video(cv2, args.log, 30.0, (w, h))
+                        print("영상 저장:", video_path, flush=True)
+                    video.write(frame)
+                    frame_number, video_frames = video_frames, video_frames + 1
 
                 # 검출 → 신호 → 상태 머신
                 detections = detect_hands(detector, detection_frame(frame, args.detect_width), clock.ms(now),
@@ -451,34 +540,32 @@ def run(args):
                 hands = assign_hands(detections)
                 signals = build_signals(hands, w, h, args.mirror)
                 enabled = not ui["paused"] and not ui["show_help"]
+                prompt = collector.prompt(now) if collector else None
+                if prompt is not None and collect_clear:
+                    # 새 차례: 직전 차례에 입력된 글자를 지우고, 쉬는 동안 시작된 접촉을 버린다.
+                    # (버리지 않으면 그 접촉이 새 차례 첫 프레임에 떼어져 엉뚱한 결과로 남는다. 2026-10-22 기록)
+                    typer.ime.clear()
+                    typer.pending, collect_clear = None, False
+                    for state in typer.hands.values():
+                        state.pinch.lost()
+                        state.contact = None
                 events = typer.update(signals, now) if enabled else []
-                for event in events:
-                    kind = event[0]
-                    if os_mouse and kind in ("move", "click", "down", "up"):
-                        os_mouse.handle(event)
-                    elif kind == "click":  # 가상 커서 클릭: 메뉴 → 버튼 순서로 맞는 것을 찾는다.
-                        point = (typer.cursor[0] * w, typer.cursor[1] * h)
-                        if event[1] == "right":
-                            ui["menu"] = point
-                        elif ui["menu"] is not None:
-                            chosen = hit(menu_rects(ui["menu"], w, h), point)
-                            ui["menu"] = None
-                            if chosen and chosen != "close":
-                                action(chosen)
-                        else:
-                            chosen = hit(button_rects(w, h), point)
-                            if chosen:
-                                action(chosen)
-                    elif kind == "mode" and event[1] == "keyboard":
-                        ui["menu"] = None
+                if collector and enabled:
+                    finished = collector.update(typer.pinches, now, typer.ime.text)
+                    events += finished
+                    if finished:
+                        collect_last, collect_clear = finished[-1], True
                 if log:
-                    log.write(json.dumps({
-                        "t": round(now, 4), "mode": typer.mode,
-                        "hands": {role: {"seen_as": hands[role].label,
-                                         "ratios": [round(v, 4) for v in sig.ratios], "facing": round(sig.facing, 3),
-                                         "pose": sig.pose, "curled": list(sig.curled)}
-                                  for role, sig in signals.items()},
-                        "events": [list(e) for e in events]}, ensure_ascii=False) + "\n")
+                    described = None if prompt is None else collector.describe(prompt)
+                    row = log_row(now, typer, hands, signals, events, w, h, collector is not None, described,
+                                  frame_number)
+                    log.write(json.dumps(row, ensure_ascii=False) + "\n")
+                if collector and collector.done:
+                    print(collector.summary(), flush=True)
+                    notice("기록 완료 · 결과는 터미널에")
+                    collector, ui["collect"] = None, None
+                elif collector:
+                    ui["collect"] = collect_view(collector, collector.prompt(now), collect_last)
 
                 # 화면
                 points = {role: to_pixels(hand.landmarks, w, h) for role, hand in hands.items()}
@@ -488,8 +575,6 @@ def run(args):
                 reasons = []
                 if now - last_snapshot >= 1.0:
                     reasons.append(f"auto-{snapshot_count % 40:02d}")
-                if any(event[0] == "mode" for event in events):
-                    reasons.append(f"mode-{snapshot_count:04d}-{typer.mode}")
                 if code in (ord("g"), ord("G")):
                     reasons.append(f"manual-{snapshot_count:04d}")
                     notice("스크린샷 저장")
@@ -507,14 +592,26 @@ def run(args):
                 if window.closed():
                     exit_reason = "영상 창 닫힘"
                     break
-                if code in TEST_KEYS:
-                    typer.press_finger(*TEST_KEYS[code], now)
+                if collector and code in (ord("n"), ord("N"), ord("b"), ord("B")):
+                    marked = collector.skip(now) if code in (ord("n"), ord("N")) else collector.redo(now)
+                    if marked:
+                        collect_last, collect_clear = marked[-1], True
+                        if log:  # 키로 남긴 결과도 같은 프레임 시각으로 로그에 남긴다.
+                            log.write(json.dumps({"t": round(now, 4), "events": [list(e) for e in marked]},
+                                                 ensure_ascii=False) + "\n")
+                elif code in TEST_KEYS:
+                    hand, finger, face, drag = TEST_KEYS[code]  # 인자 순서(손, 손가락, 시각, 방향, 끌기)에 맞춰 넘긴다
+                    typer.press_finger(hand, finger, now, face, drag)
                 elif code == 32:
                     typer.make_fist("Left", now)
                 elif code in (8, 127):
                     typer.make_fist("Right", now)
                 elif code in (ord("s"), ord("S")):
                     action("save")
+                elif code in (ord("c"), ord("C")):
+                    action("copy")
+                elif code in (ord("x"), ord("X")):
+                    action("clear")
                 elif code in (ord("f"), ord("F")):
                     window.toggle_fullscreen()
                 elif code in (ord("p"), ord("P")):
@@ -536,11 +633,15 @@ def run(args):
     finally:
         if capture is not None:
             capture.release()
+        if video is not None:
+            video.release()
         if log:
             log.close()
         cv2.destroyAllWindows()
         if exit_reason:
             print("종료 이유: " + exit_reason)
+        if collector and collector.results:
+            print("기록 중단 (" + f"{len(collector.results)}/{len(collector.order)}차례)\n" + collector.summary())
         print(f"꼬집기 판정: enter {typer.enter:.2f}, exit {typer.hands['Left'].pinch.exit:.2f}")
         print("\n입력 결과:\n" + typer.ime.text)
 
@@ -555,13 +656,23 @@ def main():
     parser.add_argument("--detect-width", type=int, default=640,
                         help="손 검출에 넣는 영상의 최대 가로 크기. 화면은 원래 해상도로 그린다")
     parser.add_argument("--pinch-enter", type=positive_float, default=PINCH_ENTER,
-                        help="엄지 끝~손가락 끝마디 거리 / 손목~중지 뿌리 길이가 이 값 아래면 꼬집은 것으로 본다")
+                        help="꼬집기 후보가 되는 거리 상한(엄지 끝~손가락 끝마디 / 손목~중지 뿌리). "
+                             "이 값 아래이면서 직전 값보다 충분히 다가온 손가락만 꼬집은 것으로 본다")
     parser.add_argument("--pinch-exit", type=positive_float, default=PINCH_EXIT, help="이 값 위로 벌리면 1회로 센다")
     parser.add_argument("--fist-hold", type=positive_float, default=0.18, help="주먹 유지 시간 (초)")
-    parser.add_argument("--gain", type=positive_float, default=2.0, help="손 이동 대비 커서 이동 배율")
-    parser.add_argument("--os-mouse", action="store_true", help="실제 OS 마우스를 움직인다 (pynput 필요)")
-    parser.add_argument("--os-scale", type=positive_float, default=1400.0, help="OS 마우스: 화면 폭 대비 이동 픽셀")
-    parser.add_argument("--log", type=Path, help="프레임별 손 신호와 이벤트를 jsonl로 남긴다 (임계값 조정용)")
+    parser.add_argument("--hold", type=float, default=HOLD_TIME,
+                        help="실험: 꼬집고 이 시간(초) 머물러야 입력(누르고 유지, 예 0.3). 기본 0은 손끝을 뗄 때 입력")
+    parser.add_argument("--log", type=Path, help="프레임별 손 신호·landmark와 이벤트를 jsonl로 남긴다 (판정값 조정용)")
+    parser.add_argument("--collect", action="store_true",
+                        help="기록 모드: 손마다 검지→소지를 한 번씩 꼬집도록 차례로 안내하고 정답과 함께 기록한다 "
+                             "(--log가 없으면 data/collect-날짜-시각.jsonl)")
+    parser.add_argument("--collect-reps", type=int, default=None,
+                        help="기록 모드 바퀴 수: 손가락 차례는 손마다 검지→소지 바퀴(기본 10), words는 단어 목록 반복(기본 1)")
+    parser.add_argument("--collect-set", choices=KINDS, default="typing",
+                        help="기록 모드 차례: typing 손바닥 자판(양손), left/right 그 손 손바닥만, edit 왼손 손등 편집 키, "
+                             "words 단어를 이어서 치기")
+    parser.add_argument("--save-video", action="store_true",
+                        help="--log(또는 --collect)와 같은 이름의 .mp4에 카메라 프레임을 저장하고 로그 행에 frame 번호를 남긴다")
     parser.add_argument("--output", type=Path, default=Path(__file__).resolve().with_name("pinch_output.txt"))
     parser.add_argument("--snapshots", type=Path, default=Path(__file__).resolve().with_name("data") / "snapshots",
                         help="진단 스크린샷 폴더 (1초마다·모드 전환 시·G 키)")
@@ -572,6 +683,12 @@ def main():
         return
     if args.pinch_exit <= args.pinch_enter:
         parser.error("--pinch-exit는 --pinch-enter보다 커야 합니다.")
+    if args.save_video and not (args.log or args.collect):
+        parser.error("--save-video는 --log나 --collect와 함께 쓰세요(로그 행의 frame 번호로 영상과 짝을 맞춘다).")
+    if args.hold < 0:
+        parser.error("--hold는 0 이상으로 지정하세요.")
+    if args.collect_reps is not None and args.collect_reps < 1:
+        parser.error("--collect-reps는 1 이상으로 지정하세요.")
     if args.detect_width < 160:
         parser.error("--detect-width는 160 이상으로 지정하세요.")
     resolve_pipeline(args)

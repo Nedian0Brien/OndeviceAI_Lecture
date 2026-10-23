@@ -64,9 +64,18 @@ struct PinchState: Decodable {
         var dragRadius: Double  // 끌기 기준 거리(m)
         var dragPreview: String?  // 지금 떼면 들어갈 획
         var dragPassed: Bool  // 끌기 기준을 넘었는가
+        var dragPointer: Double?  // 끈 방향 각도(12시 0°에서 시계 방향)
+    }
+
+    /// 마지막으로 입력된 것(손바닥 가운데에 잠깐 띄운다). id가 바뀌면 새 입력.
+    struct Echo: Decodable, Equatable {
+        var id: Int
+        var hand: String
+        var text: String
     }
 
     var text: String?
+    var echo: Echo?
     var pending: Bool?
     var pendingPunct: Bool?
     var group: [String]?

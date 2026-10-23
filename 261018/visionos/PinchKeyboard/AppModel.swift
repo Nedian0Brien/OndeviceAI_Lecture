@@ -38,6 +38,9 @@ final class AppModel {
     var frameTime: Double = 0  // 이번 프레임 시각(순환 애니메이션)
     var cycles: [String: CycleMotion] = [:]  // "Left-0" → 순환 애니메이션 상태
     var spreads: [String: Double] = [:]  // 손 → 손끝 버튼 펼침 정도(0 손바닥 가운데에 접힘 ~ 1 제자리)
+    var headPosition = SIMD3<Float>(0, 1.5, 0)  // 머리(기기) 위치: 손바닥 원형 표시를 사용자 쪽 면에 그릴 때 쓴다
+    var echo: (hand: String, text: String, start: Double)?  // 손바닥 가운데 입력 표시(state.echo id가 바뀐 시각부터)
+    private var echoID: Int?
     private var spreadMotions: [String: SpreadMotion] = [:]
     /// 모음 끌기 궤적(월드 m): 손 → 꼬집은 지점(엄지 끝과 손끝의 가운데) 목록. 판정 Python이 끌기에 쓰는 프레임과
     /// 같은 프레임들이다(dragFrames). 모음 버튼을 꼬집는 동안만 있다.
@@ -126,6 +129,7 @@ final class AppModel {
         while !Task.isCancelled {
             let frameStart = CACurrentMediaTime()
             let hands = tracker.currentHands()
+            headPosition = tracker.headPosition
             for (label, hand) in hands {
                 history[label, default: []].append(hand.world)
                 if let count = history[label]?.count, count > Self.historyLimit {
@@ -153,6 +157,12 @@ final class AppModel {
         }
         state = decoded
         frameTime = CACurrentMediaTime()
+        if let latest = decoded.echo, latest.id != echoID {
+            if echoID != nil {  // 앱을 시작할 때 이미 있던 입력은 띄우지 않는다
+                echo = (latest.hand, latest.text, frameTime)
+            }
+            echoID = latest.id
+        }
         for hand in Self.hands {
             for (finger, info) in (decoded.hands?[hand]?.fingers ?? []).enumerated() {
                 cycles["\(hand)-\(finger)", default: CycleMotion()].update(info.queue, now: frameTime)

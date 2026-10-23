@@ -17,12 +17,21 @@ Pillow·numpy·OpenCV는 함수 안에서 import한다.
 """
 
 from functools import lru_cache
+import math
 from pathlib import Path
 
 
 WHITE = (250, 250, 252, 255)
 MUTED = (230, 231, 236, 215)  # 보조 문구
 DARK_INK = (28, 29, 34, 255)  # 밝게 눌린 버튼 위 글자
+# 선 HUD(꼬집기 입력기, 2026-10-23): 가는 선과 눈금으로 정보를 나타내고 강조는 채도 낮은 파랑 한 가지다.
+# Vision Pro 앱(visionos/PinchKeyboard/HUDStyle.swift)도 같은 값을 쓴다.
+LINE = (236, 240, 248, 225)  # 기본 선
+LINE_DIM = (236, 240, 248, 95)  # 보조 선·꺼진 눈금
+ACCENT = (158, 197, 255, 255)  # 강조 선·켜진 눈금(#9EC5FF)
+ACCENT_FILL = (46, 74, 128, 150)  # 강조 면(#2E4A80 반투명)
+BACKDROP = (8, 10, 16, 120)  # 밝은 영상 위에서도 선·글자가 보이게 까는 어두운 면
+HALO = (8, 10, 16, 120)  # 가는 선 아래 어두운 테두리
 FONT_SIZES = (16, 21, 29)  # 불러올 기본 글꼴 크기. 실제 크기는 hud_font로 화면 비율에 맞춰 바꾼다.
 FONT_CANDIDATES = (
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Ubuntu·Jetson: fonts-noto-cjk
@@ -131,6 +140,24 @@ def blur_under(picture, mask, pad=8):
     return picture
 
 
+def glow_onto(picture, glow, scale):
+    """번짐 층에 그린 영역(경계 상자)만 1/2 축소 · Gaussian blur · 확대해 picture 위에 더한다."""
+    from PIL import Image, ImageFilter
+
+    box = glow.getbbox()
+    if box is None:
+        return picture
+    pad = round(8 * scale)
+    x1, y1 = max(0, box[0] - pad), max(0, box[1] - pad)
+    x2, y2 = min(picture.width, box[2] + pad), min(picture.height, box[3] + pad)
+    region = glow.crop((x1, y1, x2, y2))
+    small = region.reduce(2) if min(region.size) >= 4 else region
+    blurred = small.filter(ImageFilter.GaussianBlur(max(1.5, 2.5 * scale))).resize(region.size, Image.BILINEAR)
+    base = picture.crop((x1, y1, x2, y2))
+    picture.paste(Image.alpha_composite(base, blurred), (x1, y1))
+    return picture
+
+
 # --- 캔버스 -----------------------------------------------------------------------
 
 class HudCanvas:
@@ -154,11 +181,16 @@ class HudCanvas:
         self.draw = ImageDraw.Draw(self.overlay)
         self.material = Image.new("L", self.picture.size)
         self.material_draw = ImageDraw.Draw(self.material)
+        self.glow = Image.new("RGBA", self.picture.size)  # 번짐 층: 흐리게 해서 오버레이 아래 깐다(finish)
+        self.glow_draw = ImageDraw.Draw(self.glow)
 
-    def write(self, position, text, font, fill, anchor="la", stroke_width=0, stroke_fill=None):
-        """글자를 position에 anchor 기준으로 놓는다(anchor는 Pillow 규칙: "mm" 가운데, "la" 왼쪽 위 등)."""
+    def write(self, position, text, font, fill, anchor="la", stroke_width=0, stroke_fill=None, glow=False):
+        """글자를 position에 anchor 기준으로 놓는다(anchor는 Pillow 규칙: "mm" 가운데, "la" 왼쪽 위 등).
+        glow면 번짐 층에도 그린다."""
         sprite, left, top = hud_text_sprite(text, font, fill, anchor, stroke_width, stroke_fill)
         self.overlay.alpha_composite(sprite, (round(position[0] + left), round(position[1] + top)))
+        if glow:
+            self.glow.alpha_composite(sprite, (round(position[0] + left), round(position[1] + top)))
 
     def glass(self, bounds, circle=False, hover=False, pressed=False, tint=None, raised=False):
         """유리 버튼. 원(circle) 또는 캡슐(양 끝이 둥근 사각형).
@@ -204,12 +236,111 @@ class HudCanvas:
         self.draw.arc((x - radius, y - radius, x + radius, y + radius), -90, -90 + 360 * progress, fill=color,
                       width=width)
 
+    # --- 선 HUD 도구: 각도는 12시 방향 0°에서 시계 방향 ---------------------------------
+    @staticmethod
+    def polar(center, radius, degrees):
+        a = math.radians(degrees)
+        return center[0] + radius * math.sin(a), center[1] - radius * math.cos(a)
+
+    def _line_width(self, width):
+        return max(1, round(width if width is not None else self.scale))
+
+    def hairline_circle(self, center, radius, color, width=None, fill=None, glow=False):
+        """가는 원. 아래에 어두운 테두리(HALO)를 깔아 밝은 영상 위에서도 보이게 한다. fill은 안쪽 면."""
+        x, y = center
+        line = self._line_width(width)
+        box = (x - radius, y - radius, x + radius, y + radius)
+        if fill is not None:
+            self.draw.ellipse(box, fill=fill)
+        self.draw.ellipse((x - radius - 1, y - radius - 1, x + radius + 1, y + radius + 1), outline=HALO,
+                          width=line + 2)
+        self.draw.ellipse(box, outline=color, width=line)
+        if glow:
+            self.glow_draw.ellipse(box, outline=color, width=line + 2)
+
+    def ticks(self, center, radius, length, count, color, lit=0, lit_color=None, width=None, start=0.0, end=360.0,
+              glow=False, halo=False, lit_length=None, lit_width=None):
+        """반지름 radius에서 바깥으로 length만큼의 짧은 눈금 count개(분절 링). 12시부터 시계 방향으로 lit개는
+        lit_color(켜짐), 나머지는 color. 진행 표시는 연속 호 대신 켜진 눈금 수로 나타낸다.
+        halo: 눈금 아래 어두운 테두리(작은 눈금에 깔면 굵고 거칠어 보여 기본은 끈다).
+        lit_length·lit_width: 켜진 눈금의 길이·두께(꺼진 눈금과 구분되게 길고 두껍게 할 때)."""
+        line = self._line_width(width)
+        span = end - start
+        step = span / count if span >= 360 else span / max(1, count - 1)
+        for k in range(count):
+            angle = start + k * step
+            on = k < lit
+            size = (lit_length or length) if on else length
+            thick = self._line_width(lit_width) if on and lit_width is not None else line
+            a, b = self.polar(center, radius, angle), self.polar(center, radius + size, angle)
+            ink = (lit_color or color) if on else color
+            if halo:
+                self.draw.line((a, b), fill=HALO, width=thick + 2)
+            self.draw.line((a, b), fill=ink, width=thick)
+            if glow and on:
+                self.glow_draw.line((a, b), fill=ink, width=thick + 2)
+
+    def dashed_circle(self, center, radius, color, dashes=32, duty=0.5, width=None):
+        """파선 원(보조 기준선)."""
+        x, y = center
+        line = self._line_width(width)
+        box = (x - radius, y - radius, x + radius, y + radius)
+        step = 360 / dashes
+        for k in range(dashes):
+            begin = -90 + k * step
+            self.draw.arc(box, begin, begin + step * duty, fill=color, width=line)
+
+    def pointer(self, center, radius, degrees, size, color, glow=False):
+        """원 바깥(반지름 radius)에서 degrees 방향을 가리키는 작은 삼각형."""
+        tip = self.polar(center, radius + size, degrees)
+        left = self.polar(center, radius, degrees - size / max(radius, 1) * 40)
+        right = self.polar(center, radius, degrees + size / max(radius, 1) * 40)
+        self.draw.polygon((tip, left, right), fill=color)
+        if glow:
+            self.glow_draw.polygon((tip, left, right), fill=color)
+
+    def _box(self, center, radius):
+        return center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius
+
+    def arc(self, center, radius, start, end, color, width=None, glow=False):
+        """일부만 그린 원(12시 0°에서 시계 방향 start → end)."""
+        line = self._line_width(width)
+        self.draw.arc(self._box(center, radius), start - 90, end - 90, fill=color, width=line)
+        if glow:
+            self.glow_draw.arc(self._box(center, radius), start - 90, end - 90, fill=color, width=line + 2)
+
+    def band(self, center, inner, outer, start, end, fill, glow=False):
+        """반지름 inner~outer의 두꺼운 호(반투명 띠)."""
+        width = max(1, round(outer - inner))
+        self.draw.arc(self._box(center, outer), start - 90, end - 90, fill=fill, width=width)
+        if glow:
+            self.glow_draw.arc(self._box(center, outer), start - 90, end - 90, fill=fill, width=width)
+
+    def glow_line(self, points, color, width):
+        """번짐을 더한 선(끌기 궤적 등)."""
+        self.draw.line(points, fill=HALO, width=width + 2, joint="curve")
+        self.draw.line(points, fill=color, width=width, joint="curve")
+        self.glow_draw.line(points, fill=color, width=width + 3, joint="curve")
+
+    def clear_circle(self, center, radius):
+        """그동안 그린 선 HUD를 원 영역만큼 지운다(버튼 둘레를 비워 뒤 요소가 버튼을 가리지 않게)."""
+        box = self._box(center, radius)
+        self.draw.ellipse(box, fill=(0, 0, 0, 0))
+        self.glow_draw.ellipse(box, fill=(0, 0, 0, 0))
+
+    def panel(self, bounds, active=False, radius=None):
+        """선 HUD 패널: 어두운 면 + 가는 테두리. active면 강조 면·테두리."""
+        r = 4 * self.scale if radius is None else radius
+        rounded_rectangle(self.draw, bounds, r, fill=ACCENT_FILL if active else BACKDROP,
+                          outline=ACCENT if active else LINE_DIM, width=self._line_width(None))
+
     def finish(self):
-        """유리 아래 흐림 → 오버레이 합성 → BGR 프레임."""
+        """유리 아래 흐림 → 번짐 → 오버레이 합성 → BGR 프레임."""
         import cv2
         import numpy as np
         from PIL import Image
 
         picture = blur_under(self.picture, self.material)
+        picture = glow_onto(picture, self.glow, self.scale)
         picture = Image.alpha_composite(picture, self.overlay).convert("RGB")
         return cv2.cvtColor(np.asarray(picture), cv2.COLOR_RGB2BGR)

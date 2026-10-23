@@ -388,7 +388,7 @@ class KeyboardFrameTest(unittest.TestCase):
         for k in range(6):
             run.frames(1, sig(pinch_ratios_for(0), facing=BACK, tips=((50.0, 50.0 + 8 * k),) * 5, size=100.0), sig())
         view = run.typer.drag_view("Left")
-        self.assertEqual((view["finger"], len(view["points"]), view["drag"]), (0, 6, "v"))
+        self.assertEqual((view["finger"], len(view["points"]), view["drag"], view["pointer"]), (0, 6, "v", 180))
         self.assertEqual(view["points"][0], (50.0, 50.0))
         run.frames(3, sig(facing=BACK), sig())
         self.assertIsNone(run.typer.drag_view("Left"))
@@ -403,6 +403,21 @@ class KeyboardFrameTest(unittest.TestCase):
         opening = sig(facing=BACK, tips=((50.0, 110.0),) * 5, size=100.0)
         run.frames(5, still, sig()).frames(2, opening, sig()).frames(3, sig(facing=BACK), sig())
         self.assertEqual(run.kinds("input"), [("input", "ㆍ")])
+
+    def test_echo_shows_last_input(self):
+        # 입력될 때마다 echo 번호가 늘고, 손과 표시 글자(순환한 글자, 공백·확정은 이름)가 남는다.
+        typer = PinchTyper()
+        self.assertIsNone(typer.echo)
+        typer.press_finger("Right", 0, 0.0)
+        self.assertEqual(typer.echo, (1, "Right", "ㄱ"))
+        typer.press_finger("Right", 0, 0.3)
+        self.assertEqual(typer.echo, (2, "Right", "ㅋ"))
+        typer.press_finger("Right", 0, 0.6, "back")  # 후보 있음: 확정
+        self.assertEqual(typer.echo, (3, "Right", "확정"))
+        typer.press_finger("Right", 0, 0.9, "back")  # 후보 없음: 공백
+        self.assertEqual(typer.echo, (4, "Right", "공백"))
+        typer.press_finger("Right", 1, 1.2, "back")  # 자판에 없는 자리: 그대로
+        self.assertEqual(typer.echo[0], 4)
 
     def test_turning_hand_is_ignored(self):
         run = Runner().ready()
@@ -696,6 +711,7 @@ class VisionSessionTest(unittest.TestCase):
         from pinch_vision import Session
         outputs, _ = self.run_frames(Session(), self.pinch_frames())
         self.assertEqual([e for out in outputs for e in out["events"]], [["input", "ㅂ"]])
+        self.assertEqual(outputs[-1]["echo"], {"id": 1, "hand": "Left", "text": "ㅂ"})
         last = outputs[-1]
         self.assertEqual((last["text"], last["hands"]["Left"]["face"]), ("ㅂ", "palm"))
         self.assertEqual([f["queue"] for f in last["hands"]["Left"]["fingers"]],
@@ -747,7 +763,8 @@ class VisionSessionTest(unittest.TestCase):
         self.assertEqual(counts, sorted(counts))
         self.assertTrue(0.01 < dragging[-1]["drag_radius"] < 0.04, dragging[-1]["drag_radius"])
         self.assertEqual((dragging[0]["drag_preview"], dragging[0]["drag_passed"]), ("ㆍ", False))
-        self.assertEqual((dragging[-1]["drag_preview"], dragging[-1]["drag_passed"]), ("ㅣ", True))
+        self.assertEqual((dragging[-1]["drag_preview"], dragging[-1]["drag_passed"], dragging[-1]["drag_pointer"]),
+                         ("ㅣ", True, 180))  # 아래로 끌었다
         self.assertEqual(outputs[-1]["hands"]["Left"]["dragging"], None)
         self.assertEqual([e for out in outputs for e in out["events"]], [["input", "ㅣ"]])
 
@@ -946,8 +963,8 @@ class CycleQueueTest(unittest.TestCase):
             points[i] = (10.0, y)
         start = (10.0, 10.0)
         self.assertEqual(finger_path_point(points, 0, start, 0.0), start)
-        self.assertEqual(finger_path_point(points, 0, start, 1.0), (10.0, 100.0))
-        self.assertEqual(finger_path_point(points, 0, start, 0.5), (10.0, 55.0))
+        self.assertEqual(finger_path_point(points, 0, start, 1.0), (10.0, 70.0))  # PIP
+        self.assertEqual(finger_path_point(points, 0, start, 0.5), (10.0, 40.0))
 
     def test_spread_folds_on_fist_and_unfolds_after_hold(self):
         # 손끝 버튼: 처음 보이는 손은 0에서 펼쳐지고, 주먹이면 SPREAD_CLOSE초에 접히고, 편 뒤 SPREAD_HOLD초가 지나야
@@ -970,6 +987,25 @@ class CycleQueueTest(unittest.TestCase):
         half = next(v for dt, v in values if dt >= SPREAD_HOLD + DT + SPREAD_OPEN / 2)
         self.assertTrue(0.5 < half < 1.0, half)  # ease-out: 절반 시간에 절반보다 많이
         self.assertEqual(values[-1][1], 1.0)
+
+    def test_echo_appears_then_fades(self):
+        # 입력 표시: 빠르게 나타나 머물다 커지며 사라진다. 새 입력(번호)마다 처음부터.
+        from pinch_cheonjiin import ECHO_HOLD, ECHO_IN, ECHO_OUT, echo_look, echo_view
+        alpha, grow = echo_look(ECHO_IN / 2)
+        self.assertAlmostEqual(alpha, 0.5)
+        self.assertAlmostEqual(grow, 0.925)
+        self.assertEqual(echo_look((ECHO_IN + ECHO_HOLD) / 2), (1.0, 1.0))
+        alpha, grow = echo_look((ECHO_HOLD + ECHO_OUT) / 2)
+        self.assertAlmostEqual(alpha, 0.5)
+        self.assertGreater(grow, 1.0)
+        self.assertIsNone(echo_look(ECHO_OUT))
+        typer, ui = PinchTyper(), {}
+        self.assertIsNone(echo_view(ui, typer, 0.0))
+        typer.press_finger("Right", 0, 0.0)
+        self.assertEqual(echo_view(ui, typer, 10.0)[:2], ("Right", "ㄱ"))
+        self.assertIsNone(echo_view(ui, typer, 10.0 + ECHO_OUT + 0.01))
+        typer.press_finger("Right", 0, 0.3)
+        self.assertEqual(echo_view(ui, typer, 11.0)[:3], ("Right", "ㅋ", 0.0))
 
     def test_motion_only_when_queue_turns(self):
         from pinch_cheonjiin import CYCLE_ANIM, cycle_motion

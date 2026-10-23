@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 입력 창: Mac 앱 HUD 위쪽(입력 캡슐, 순환 그룹 줄)과 아래쪽(상태 안내, 자판 지도)을 같은 모양으로 그린다.
+/// 입력 창: Mac 앱 HUD 위쪽(입력 칸, 순환 그룹 줄)과 아래쪽(상태 안내, 자판 지도)을 같은 모양(선 HUD)으로 그린다.
 /// Mac의 단축키 대신 아래에 버튼을 둔다.
 struct ContentView: View {
     @Environment(AppModel.self) private var model
@@ -25,7 +25,7 @@ struct ContentView: View {
                 .lineLimit(2)
                 .padding(.horizontal, 14 * Self.scale)
                 .frame(minHeight: 26 * Self.scale)
-                .background(GlassShape(circle: false))
+                .background(LinePanel(cornerRadius: 4 * Self.scale))
             if model.showMap {
                 KeyboardMap()
             }
@@ -72,7 +72,8 @@ struct ContentView: View {
     }
 }
 
-/// 입력 한 줄 캡슐. 확정 전 후보 글자 아래에 밑줄, 후보가 없으면 0.5초 간격으로 깜빡이는 커서.
+/// 입력 한 줄 칸(선 HUD 패널 + 아래 눈금자, 큰 눈금 5칸마다). 확정 전 후보 글자 아래에 파랑 밑줄,
+/// 후보가 없으면 0.5초 간격으로 깜빡이는 커서.
 private struct InputCapsule: View {
     @Environment(AppModel.self) private var model
 
@@ -102,20 +103,32 @@ private struct InputCapsule: View {
             }
             .padding(.horizontal, 20 * scale)
             .frame(minWidth: 140 * scale, minHeight: (text.isEmpty ? 34 : 40) * scale)
-            .background(GlassShape(circle: false))
+            .background(LinePanel(cornerRadius: 4 * scale))
+            .overlay {
+                Canvas { context, size in  // 아래 눈금자
+                    let count = Int(size.width / (6 * scale))
+                    for k in 1..<max(2, count) {
+                        let x = size.width * CGFloat(k) / CGFloat(count)
+                        var tick = Path()
+                        tick.move(to: CGPoint(x: x, y: size.height))
+                        tick.addLine(to: CGPoint(x: x, y: size.height - (k % 5 == 0 ? 5 : 3) * scale))
+                        context.stroke(tick, with: .color(HUD.lineDim), lineWidth: 1)
+                    }
+                }
+            }
         }
     }
 
     private func attributed(_ text: String) -> AttributedString {
         var shown = AttributedString(text)
         if model.state.pending == true, model.state.pendingPunct != true, let last = shown.characters.indices.last {
-            shown[last...].underlineStyle = Text.LineStyle(pattern: .solid, color: HUD.white)
+            shown[last...].underlineStyle = Text.LineStyle(pattern: .solid, color: HUD.accent)
         }
         return shown
     }
 }
 
-/// 캡슐 아래: 순환 중인 그룹(지금 글자만 밝게).
+/// 입력 칸 아래: 순환 중인 그룹. 글자마다 아래 막대, 지금 글자만 밝게 + 파랑 막대(분절 표시).
 private struct GroupRow: View {
     @Environment(AppModel.self) private var model
 
@@ -124,11 +137,19 @@ private struct GroupRow: View {
         HStack(spacing: 0) {
             if let group = model.state.group {
                 ForEach(Array(group.enumerated()), id: \.offset) { index, char in
+                    let current = index == model.state.groupIndex
                     Text(char)
                         .font(ContentView.normal)
-                        .foregroundStyle(index == model.state.groupIndex ? HUD.white : HUD.dim)
+                        .foregroundStyle(current ? HUD.white : HUD.dim)
                         .outlined()
                         .frame(width: cell, height: cell)
+                        .overlay(alignment: .bottom) {
+                            Rectangle()
+                                .fill(current ? HUD.accent : HUD.lineDim)
+                                .frame(width: cell - 8 * ContentView.scale, height: current ? 2 * ContentView.scale : 1)
+                                .glow(current, radius: 2 * ContentView.scale)
+                                .offset(y: 2 * ContentView.scale)
+                        }
                 }
             }
         }
@@ -136,7 +157,7 @@ private struct GroupRow: View {
     }
 }
 
-/// 자판 지도(Mac의 K): 손마다 지금 방향의 네 키. 꼬집는 키는 밝게.
+/// 자판 지도(Mac의 K): 손마다 지금 방향의 네 키(선 HUD 칸). 꼬집는 키는 파랑.
 private struct KeyboardMap: View {
     @Environment(AppModel.self) private var model
 
@@ -153,7 +174,7 @@ private struct KeyboardMap: View {
                             .font(name.map { $0.count <= 3 && $0 != ".,?!" } ?? true ? ContentView.normal : ContentView.small)
                             .foregroundStyle(HUD.white)
                             .frame(width: 50 * scale, height: 28 * scale)
-                            .background(GlassShape(circle: false, hover: active))
+                            .background(LinePanel(active: active, cornerRadius: 4 * scale))
                             .opacity(name == nil ? 0 : 1)
                     }
                 }

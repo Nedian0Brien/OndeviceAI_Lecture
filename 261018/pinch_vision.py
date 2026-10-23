@@ -19,8 +19,10 @@ step 출력(Mac 앱 HUD가 그리는 것과 같은 정보, pinch_cheonjiin.draw_
                   "drag_frames": 판정에 쓰는 이번 접촉의 프레임 수(이 손이 보인 마지막 프레임들. 앱은 같은 프레임의
                                  관절로 궤적을 그린다), "drag_radius": 끌기 기준 거리(m, 손 크기 × DRAG_MIN),
                   "drag_preview": 지금 떼면 들어갈 획(ㆍ / ㅡ / ㅣ), "drag_passed": 끌기 기준을 넘었는가,
+                  "drag_pointer": 끈 방향 각도(12시 0°에서 시계 방향, 화면 기준) 또는 null,
                   "map": [자판 지도 키 이름 또는 null × 4],
                   "fingers": [{"queue", "active", "approach", "release", "hold"} × 4]}},
+   "echo": {"id", "hand", "text"} 마지막으로 입력된 것(앱이 손바닥 가운데에 잠깐 띄운다, id가 바뀌면 새 입력) 또는 null,
    "log": 기록 파일 경로 또는 null}
 command(JSON): {"cmd": "clear" | "log_start" | "log_stop" | "demo" | "info" | "settings"} — 결과는 step 출력과 같은
   모양(+ "notice", "settings").
@@ -108,6 +110,7 @@ class Session:
                 "drag_radius": 0.0 if drag is None else round(DRAG_MIN * drag["size"] / IMAGE_SCALE, 4),
                 "drag_preview": None if drag is None else VOWEL_LABELS[DRAG_STROKES[drag["drag"]]],
                 "drag_passed": drag is not None and drag["drag"] is not None,
+                "drag_pointer": None if drag is None else drag["pointer"],
                 "map": [None if key is None else key_label(key) for key in keys],
                 "fingers": [{"queue": cycle_queue(typer, label, finger), "active": hand.pinch.active == finger,
                              "approach": round(approach[finger], 3),
@@ -122,6 +125,7 @@ class Session:
                 "pending_punct": pending is not None and pending.key == "PUNCT",
                 "group": group, "group_index": None if pending is None else (pending.count - 1) % len(group),
                 "hold_mode": bool(typer.hands["Left"].pinch.hold), "hands": hands,
+                "echo": None if typer.echo is None else dict(zip(("id", "hand", "text"), typer.echo)),
                 "settings": self.settings(),
                 "log": None if self.log_path is None else str(self.log_path), "notice": notice}
 

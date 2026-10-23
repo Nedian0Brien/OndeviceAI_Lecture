@@ -25,6 +25,9 @@ final class HandTracker: @unchecked Sendable {
         var image: [SIMD3<Float>]  // 21점, 머리 기준 이미지 축(m)
     }
 
+    /// 마지막 currentHands 시점의 머리(기기) 위치(월드). 손바닥 원형 표시를 손바닥·손등 중 사용자 쪽 면에 그릴 때 쓴다.
+    private(set) var headPosition = SIMD3<Float>(0, 1.5, 0)
+
     private let session = ARKitSession()
     private let handProvider = HandTrackingProvider()
     private let worldProvider = WorldTrackingProvider()
@@ -57,6 +60,8 @@ final class HandTracker: @unchecked Sendable {
             return [:]
         }
         let headFromWorld = device.originFromAnchorTransform.inverse
+        let head = device.originFromAnchorTransform.columns.3
+        headPosition = SIMD3(head.x, head.y, head.z)
         let anchors = handProvider.latestAnchors
         var hands: [String: Hand] = [:]
         for (label, anchor) in [("Left", anchors.leftHand), ("Right", anchors.rightHand)] {

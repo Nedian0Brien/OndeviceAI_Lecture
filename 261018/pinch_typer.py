@@ -190,6 +190,7 @@ def drag_of(dx, dy, size):
 
 
 CYCLE_SHOWN = 3  # 손가락 위에 보이는 순환 글자 수(문장부호 그룹 5개는 앞 3개만)
+ECHO_NAMES = {" ": "공백", "\n": "줄바꿈"}  # 손바닥 가운데 입력 표시(PinchTyper.echo)에서 보이지 않는 글자의 이름
 
 
 # 손끝 라벨(화면 표시용). 앱(pinch_cheonjiin)과 Vision Pro 앱(pinch_vision)이 함께 쓴다.
@@ -607,6 +608,8 @@ class PinchTyper:
                       for label in HANDS}
         self.pending: Optional[Pending] = None
         self.pinches = []  # 직전 update에서 입력으로 인정된 꼬집기 [(손, 손가락, "palm"|"back")] (기록 모드가 읽는다)
+        # 마지막으로 입력된 것 (번호, 손, 표시 글자). 앱이 손바닥 가운데에 잠깐 띄운다(번호가 바뀌면 새 입력).
+        self.echo: Optional[tuple] = None
         self.occluded_roll = occluded_roll  # 엄지 가림 기울기 기준(도). pinch_eval이 바꿔 가며 비교한다.
         self.settle = SETTLE  # 손 방향이 바뀐 뒤 판정을 쉬는 시간(초). 0이면 쉬지 않는다(Vision Pro 설정 창).
         self.index_sweep_rule = True  # 오른손 검지 지나감 규칙(INDEX_REPASS)을 쓰는가(Vision Pro 설정 창).
@@ -629,6 +632,15 @@ class PinchTyper:
 
     # -- 키 단위 동작 (고정 데이터·키보드 시험에서도 직접 부른다) ----------
     def press_finger(self, hand, finger, now, face="palm", drag=None):
+        """hand의 finger를 face 방향에서 한 번 꼬집었다(_press). 입력된 것은 echo에 남긴다(공백·줄바꿈·확정은 이름으로)."""
+        events = self._press(hand, finger, now, face, drag)
+        shown = [ECHO_NAMES.get(value, value) if kind == "input" else "확정"
+                 for kind, value in events if kind in ("input", "commit")]
+        if shown:
+            self.echo = ((self.echo[0] + 1) if self.echo else 1, hand, shown[-1])
+        return events
+
+    def _press(self, hand, finger, now, face="palm", drag=None):
         """hand의 finger(0 검지 ~ 3 소지)를 face(손바닥 "palm" / 손등 "back") 방향에서 한 번 꼬집었다.
 
         drag: 모음 버튼을 꼬집은 채 끈 방향(None 없음 → ㆍ, "h" 가로 → ㅡ, "v" 세로 → ㅣ). 다른 키에서는 쓰지 않는다.
@@ -743,7 +755,8 @@ class PinchTyper:
 
     def drag_view(self, hand):
         """화면용: 그 손이 모음 버튼을 꼬집는 중이면 {"finger", "points"(꼬집기 지점, 이미지 좌표), "size", "drag"(지금
-        떼면 들어갈 끌기)}. 아니면 None. 사용자가 끄는 모양을 그리고, 끌기 기준 원과 들어갈 획을 미리 보여 주는 데 쓴다."""
+        떼면 들어갈 끌기), "pointer"(끈 방향 각도: 12시 0°에서 시계 방향, 끌기 없으면 None)}. 아니면 None.
+        사용자가 끄는 모양을 그리고, 끌기 기준 원과 들어갈 획·방향을 미리 보여 주는 데 쓴다(Mac 앱·Vision Pro 앱)."""
         state, face = self.hands[hand], self.face(hand)
         finger = state.pinch.active
         if finger is None or face is None or KEYS[(hand, face)][finger] != "VOWEL":
@@ -751,7 +764,12 @@ class PinchTyper:
         points, size = self.pinch_path(state.held, finger)
         if not points:
             return None
-        return {"finger": finger, "points": points, "size": size, "drag": self.drag_of_path(points, size)}
+        drag = self.drag_of_path(points, size)
+        pointer = None
+        if drag is not None:  # 가장 멀리 간 지점 쪽(가로면 오른쪽 90° / 왼쪽 270°, 세로면 아래 180° / 위 0°)
+            (ox, oy), (fx, fy) = points[0], max(points, key=lambda q: math.dist(q, points[0]))
+            pointer = (90 if fx >= ox else 270) if drag == "h" else (180 if fy >= oy else 0)
+        return {"finger": finger, "points": points, "size": size, "drag": drag, "pointer": pointer}
 
     def occluded(self, hand):
         """화면 안내용: 그 손이 지금 손바닥이고 엄지가 가려질 만큼 소지 쪽으로 기울었는가."""

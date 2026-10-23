@@ -40,9 +40,6 @@ struct ContentView: View {
             Button(model.handsRunning ? "손 입력 끝" : "손 입력 시작") {
                 Task { await toggleHands() }
             }
-            Button(model.state.log == nil ? "기록 시작" : "기록 끝") {
-                Task { await model.command(model.state.log == nil ? "log_start" : "log_stop") }
-            }
             Button("지우기") {
                 Task { await model.command("clear") }
             }

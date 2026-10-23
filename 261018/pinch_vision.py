@@ -30,6 +30,8 @@ command(JSON): {"cmd": "clear" | "log_start" | "log_stop" | "demo" | "info" | "s
   info: 내장 Python 버전과 고정 데이터 재생 결과(입력 칸은 바꾸지 않는다). 앱이 시작할 때 자기 점검으로 부른다.
 
 기록(log_start ~ log_stop)은 pinch_cheonjiin.log_row와 같은 필드로 남겨 pinch_eval.py가 그대로 읽는다.
+앱은 손 입력을 시작할 때 log_start, 끝낼 때 log_stop을 부른다(늘 기록, 사용자 2026-10-23). 파일은 1분에 약 8MB라
+새 기록을 시작할 때 최근 LOG_KEEP개만 남기고 지운다.
 """
 
 import json
@@ -49,6 +51,7 @@ HOLD_SECONDS = 0.3  # 설정 창에서 누르고 유지를 켰을 때 머무는 
 # 픽셀 기준값을 쓴다. m 그대로 넘기면 모든 마디(약 0.03)가 건너뛰어져 자세가 늘 closing이 되고 주먹(지움)이 판정되지
 # 않았다(2026-10-23 기기 기록). 손바닥 방향·기울기는 비율·각도만 써서 배율과 무관하다.
 IMAGE_SCALE = 1000.0
+LOG_KEEP = 20  # 남겨 둘 기록 파일 수(손 입력 세션 하나가 파일 하나)
 
 
 def points(rows):
@@ -174,6 +177,9 @@ class Session:
             return "기록 폴더가 없습니다"
         self.stop_log()
         self.log_dir.mkdir(parents=True, exist_ok=True)
+        old = sorted(self.log_dir.glob("pinch-log-visionos-*.jsonl"))
+        for path in old[:max(0, len(old) - (LOG_KEEP - 1))]:  # 새 파일까지 LOG_KEEP개
+            path.unlink()
         self.log_path = self.log_dir / f"pinch-log-visionos-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
         self.log = open(self.log_path, "a", encoding="utf-8")
         return "기록 시작: " + self.log_path.name

@@ -96,7 +96,8 @@ final class AppModel {
             return
         }
         handsRunning = true
-        status = "손 입력 중"
+        await command("log_start")  // 손 입력 중에는 늘 기록한다(사용자, 2026-10-23). 오래된 파일은 Python이 정리한다.
+        status = "손 입력 중 · 기록 중"
         loop = Task { [weak self] in
             await self?.runLoop()
         }
@@ -110,7 +111,10 @@ final class AppModel {
         layouts = [:]
         trails = [:]
         history = [:]
-        status = "손 입력 멈춤"
+        Task {
+            await command("log_stop")
+            status = "손 입력 멈춤 · 기록 저장됨"
+        }
     }
 
     /// 프레임마다: 손 관절 → 판정 Python → 상태·손 배치. 약 45Hz.

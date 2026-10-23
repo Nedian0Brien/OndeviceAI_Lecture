@@ -51,8 +51,9 @@ xcodebuild -project PinchKeyboard.xcodeproj -scheme PinchKeyboard -destination '
 
 - 창의 "손 입력 시작" → 몰입 공간이 열리고 손끝마다 다음 글자 라벨이 뜬다. 자판과 규칙은 `261018/README.md`와 같다.
 - "고정 데이터 재생"은 카메라·손 없이 '안녕하세요'를 재생한다(내장 Python이 도는지 확인용).
-- "기록 시작/끝": 프레임별 손 신호를 앱 Documents의 `pinch-log-visionos-날짜-시각.jsonl`에 남긴다. 파일 앱의
-  "나의 Vision Pro"에서 보이고, Mac으로 옮겨 `python 261018/pinch_eval.py 기록.jsonl`로 다시 볼 수 있다.
+- 기록: 손 입력 중에는 늘 프레임별 손 신호를 앱 Documents의 `pinch-log-visionos-날짜-시각.jsonl`에 남긴다(손 입력
+  한 번이 파일 하나, 1분에 약 8MB, 최근 20개만 남김). Mac에서 가져와 `python 261018/pinch_eval.py 기록.jsonl`로 다시 본다:
+  `xcrun devicectl device copy from --device <기기> --domain-type appDataContainer --domain-identifier com.minjaepark.pinchkeyboard --source Documents/<파일> --destination <경로>`
 
 ## 알려진 한계
 

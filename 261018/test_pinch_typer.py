@@ -667,7 +667,7 @@ class VisionSessionTest(unittest.TestCase):
         from common import synthetic
         world = synthetic.world_hand(synthetic.AWAY)
         index_pad = tuple((world[7] + world[8]) / 2 + [0.004, 0, 0])  # 검지 끝마디 가운데 옆
-        return [self.joints(synthetic.AWAY)] * 25 + [self.joints(index_pad)] * 5 + [self.joints(__import__("common.synthetic", fromlist=["AWAY"]).AWAY)] * 3
+        return [self.joints(synthetic.AWAY)] * 25 + [self.joints(index_pad)] * 5 + [self.joints(synthetic.AWAY)] * 3
 
     def test_step_types_from_joints(self):
         from pinch_vision import Session
@@ -725,6 +725,26 @@ class VisionSessionTest(unittest.TestCase):
         self.assertEqual((dragging[-1]["drag_preview"], dragging[-1]["drag_passed"]), ("ㅣ", True))
         self.assertEqual(outputs[-1]["hands"]["Left"]["dragging"], None)
         self.assertEqual([e for out in outputs for e in out["events"]], [["input", "ㅣ"]])
+
+    def test_log_keeps_recent_files(self):
+        # 늘 기록하므로 새 기록을 시작할 때 최근 LOG_KEEP개만 남긴다(새 파일 포함). 다른 파일은 건드리지 않는다.
+        import tempfile
+        from common import synthetic
+        from pinch_vision import LOG_KEEP, Session
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            for k in range(LOG_KEEP + 3):
+                (folder / f"pinch-log-visionos-20260101-{k:06d}.jsonl").write_text("{}")
+            (folder / "other.txt").write_text("x")
+            session = Session(folder)
+            session.command(json.dumps({"cmd": "log_start"}))
+            self.run_frames(session, [self.joints(synthetic.AWAY)] * 3)
+            session.command(json.dumps({"cmd": "log_stop"}))
+            logs = sorted(folder.glob("pinch-log-visionos-*.jsonl"))
+            self.assertEqual(len(logs), LOG_KEEP)
+            self.assertNotIn("20260101-000000", " ".join(path.name for path in logs))
+            self.assertEqual(len(logs[-1].read_text().splitlines()), 3)
+            self.assertTrue((folder / "other.txt").exists())
 
     def test_demo_and_clear(self):
         from pinch_vision import Session

@@ -67,6 +67,27 @@ class FrameTest(unittest.TestCase):
             run.frames(6, sig(pinched(0), facing=facing, curled=curled), sig()).frames(3, sig(facing=facing), sig())
             self.assertEqual(run.kinds("input"), expected, facing)
 
+    def test_vowel_right_after_flip_to_back(self):
+        # 손바닥에서 손등으로 뒤집고 손 방향이 인정되기 전(FACING_DWELL)에 꼬집어도 손등 모음으로 들어간다.
+        # 2026-10-24 Vision Pro 기록: 뒤집고 0.14초 뒤 시작한 ㅣ 3개가 손바닥 꼬집기로 기록돼 모두 버려졌다.
+        run = Runner().ready()
+        run.frames(3, sig(facing=BACK), sig())  # 뒤집는 중: 아직 손바닥으로 인정된 상태
+        self.assertEqual(run.typer.face("Left"), "palm")
+        for k in range(6):
+            run.frames(1, sig(pinched(0), facing=BACK, curled=(False, True, True, True),
+                              tips=((50.0, 50.0 + 8 * k),) * 5, size=100.0), sig())
+        run.frames(3, sig(facing=BACK), sig())
+        self.assertEqual(run.kinds("input"), [("input", "ㅣ")])
+
+    def test_back_pinch_keeps_through_one_frame_palm_jitter(self):
+        # 손등 모음 접촉 중 손 방향 값이 한 프레임 손바닥 쪽으로 튀어도, 다른 손가락이 굽었다고 버리지 않는다.
+        curled = (False, True, True, True)
+        run = Runner().ready(left_facing=BACK)
+        run.frames(3, sig(pinched(0), facing=BACK, curled=curled), sig())
+        run.frames(1, sig(pinched(0), facing=0.6, curled=curled), sig())
+        run.frames(3, sig(pinched(0), facing=BACK, curled=curled), sig()).frames(3, sig(facing=BACK), sig())
+        self.assertEqual(run.kinds("input"), [("input", "ㆍ")])
+
     def test_turning_and_flipping_hand_is_ignored(self):
         run = Runner().ready()
         run.frames(4, sig(pinched(0), facing=0.1), sig()).frames(3, sig(facing=0.1), sig())  # 회전 중

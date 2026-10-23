@@ -124,7 +124,6 @@ class Session:
         self.typer.pending = None
         for hand in self.typer.hands.values():
             hand.pinch.lost()
-            hand.contact = None
             hand.held = []
 
     def _finished(self, event, now):

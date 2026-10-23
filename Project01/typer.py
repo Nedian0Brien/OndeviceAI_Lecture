@@ -10,8 +10,9 @@
 
 입력으로 인정하는 조건(update)
   - 손 방향이 손바닥이나 손등이다(회전 중에는 꼬집기를 보지 않는다).
-  - 접촉을 시작할 때와 뗄 때 손 방향이 같고, 접촉의 처음·마지막 STEADY_FRAMES 프레임의 손 방향 값도 그 방향이다.
-    손을 뒤집는 도중의 꼬집기를 입력으로 세지 않기 위해서다.
+  - 접촉의 처음·마지막 STEADY_FRAMES 프레임의 손 방향 값이 뗄 때의 손 방향이다(steady).
+    손을 뒤집는 도중의 꼬집기를 입력으로 세지 않기 위해서다. 접촉을 시작할 때의 손 방향 판정(Orientation)과는
+    비교하지 않는다: 뒤집자마자 꼬집으면 그 판정이 아직 이전 방향이다(frame_face).
   - 손바닥 꼬집기는 소지 쪽으로 OCCLUDED_ROLL° 넘게 기울지 않았다(그 자세는 엄지가 가려 손가락을 믿을 수 없다).
   - 오른손 손바닥 검지는 엄지가 지나간 것이 아니다(pinch.FingerPinch.index_sweep).
 """
@@ -60,7 +61,6 @@ class HandState:
         self.orientation = Orientation()
         self.fist = FistHold(FIST_HOLD, FIST_REPEAT, FIST_REARM)
         self.signal = None  # 이번 프레임의 HandSignal
-        self.contact: Optional[str] = None  # 접촉을 시작할 때의 손 방향
         self.held: list = []  # 이번 접촉 동안의 프레임별 신호(손 방향 확인, 모음 끌기)
 
 
@@ -191,6 +191,21 @@ class PinchTyper:
                                      for part in (facings[:STEADY_FRAMES], facings[-STEADY_FRAMES:]))
 
     @staticmethod
+    def frame_face(signal, state):
+        """이번 프레임의 손 방향: 손 방향 값이 FACING_THRESHOLD를 넘으면 그 방향, 아니면 인정된 방향(state).
+
+        Orientation은 새 방향이 FACING_DWELL초 이어져야 바꾸므로, 손을 뒤집자마자 꼬집으면 접촉 시작 프레임이 아직
+        이전 방향이다. 손등 모음을 손바닥 규칙(SPOIL_CURLED)으로 버리지 않게, 굽음 규칙은 이 값도 본다
+        (2026-10-24 Vision Pro 기록: 뒤집고 0.14초 뒤 시작한 ㅣ 3개가 모두 버려짐). 회전 중·판정 전에는 state 그대로다.
+        """
+        if signal is not None and state in FACES:
+            if signal.facing >= FACING_THRESHOLD:
+                return "palm"
+            if signal.facing <= -FACING_THRESHOLD:
+                return "back"
+        return state
+
+    @staticmethod
     def hidden(held, face):
         """손바닥 접촉 동안 기울기 중앙값이 OCCLUDED_ROLL 이하인가(엄지가 가려 손가락 값을 믿을 수 없음)."""
         return face == "palm" and bool(held) and statistics.median(s.roll for s in held) <= OCCLUDED_ROLL
@@ -207,7 +222,6 @@ class PinchTyper:
             hand.pinch.lost()
             hand.fist.lost()
             hand.orientation.lost()
-            hand.contact = None
             hand.held = []
         self.pending = None
 
@@ -218,19 +232,16 @@ class PinchTyper:
             hand.signal = signals.get(label)
             hand.orientation.update(None if hand.signal is None else hand.signal.facing, now)
             signal, state = hand.signal, hand.orientation.state
-            hand.pinch.spoil_curled = state != "back"  # 손등 꼬집기는 다른 손가락이 굽어도 버리지 않는다
+            # 손등 꼬집기는 다른 손가락이 굽어도 버리지 않는다. 인정된 방향이나 이번 프레임 방향 중 하나라도 손등이면
+            # 쓰지 않는다: 뒤집자마자 꼬집은 접촉도, 손등 접촉 중 손 방향 값이 한 프레임 튄 것도 버리지 않는다.
+            hand.pinch.spoil_curled = "back" not in (state, self.frame_face(signal, state))
             tap = hand.pinch.update(signal if state in FACES else None, now)  # 회전 중에는 꼬집기를 보지 않는다
             if tap is not None and tap[0] == 0 and label == "Right" and state == "palm" and hand.pinch.index_sweep():
                 hand.pinch.undo_tap()  # 오른손 검지 지나감: 입력하지 않는다
                 tap = None
             if signal is not None and (tap is not None or hand.pinch.active is not None):
                 hand.held.append(signal)
-            contact = hand.contact  # 이번 접촉을 시작할 때의 손 방향
-            if tap is not None or hand.pinch.active is None:
-                hand.contact = None
-            elif hand.contact is None:
-                hand.contact = contact = state
-            if tap is not None and contact == state and state in FACES and self.steady(hand.held, state) \
+            if tap is not None and state in FACES and self.steady(hand.held, state) \
                     and not self.hidden(hand.held, state) and KEYS[(label, state)][tap[0]] is not None:
                 self.pinches.append((label, tap[0], state))
                 drag = self.drag(hand.held, tap[0]) if KEYS[(label, state)][tap[0]] == "VOWEL" else None

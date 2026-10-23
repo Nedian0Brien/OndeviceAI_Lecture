@@ -159,7 +159,6 @@ def run(args):
                     typer.pending, new_word = None, False
                     for state in typer.hands.values():
                         state.pinch.lost()
-                        state.contact = None
                 events = typer.update(signals, now) if enabled else []
                 if test and enabled:
                     finished = test.update(now, typer.ime.text)

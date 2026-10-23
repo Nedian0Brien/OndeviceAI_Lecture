@@ -45,7 +45,6 @@ def replay(path, on_prompt):
             if prompt is not None and prompt["id"] != current:
                 for state in typer.hands.values():
                     state.pinch.lost()
-                    state.contact = None
             current = None if prompt is None else prompt["id"]
             signals = {hand: signal_from_log(v, row.get("size", (1.0, 1.0))) for hand, v in row["hands"].items()}
             typer.update({hand: signals.get(hand) for hand in HANDS}, row["t"])

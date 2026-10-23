@@ -66,9 +66,6 @@ HOLD_SECONDS = 0.3  # 설정 창에서 누르고 유지를 켰을 때 머무는 
 # 않았다(2026-10-23 기기 기록). 손바닥 방향·기울기는 비율·각도만 써서 배율과 무관하다.
 IMAGE_SCALE = 1000.0
 LOG_KEEP = 20  # 남겨 둘 기록 파일 수(손 입력 세션 하나가 파일 하나)
-# 주먹 지움을 다시 받는 조건: 주먹이 아닌 상태가 FIST_REARM초 이어짐(손끝 버튼이 다시 펼쳐지는 기준과 같다,
-# common.gestures.FistHold rearm). Vision Pro 기록에서 주먹을 쥔 채 끊기는 길이는 0.03~0.05초였다.
-FIST_REARM = 0.15
 
 
 def points(rows):
@@ -86,8 +83,6 @@ def signal_of(label, joints):
 class Session:
     def __init__(self, log_dir=None):
         self.typer = PinchTyper()
-        for hand in self.typer.hands.values():
-            hand.fist.rearm = FIST_REARM
         self.log_dir = Path(log_dir) if log_dir else None
         self.log, self.log_path = None, None
         self.signals = {}

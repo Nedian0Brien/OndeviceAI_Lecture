@@ -151,6 +151,14 @@ HOLD_INDEX_DEPTH = 0.10
 # 손 방향이 바뀐 뒤 SETTLE초 동안은 꼬집기 판정에 넣지 않는다. 손을 돌리는 동안 검지 값이 0.5 → 0.2로 내려와 다가온 것으로
 # 보이고, 엄지가 검지 옆에서 쉬면 그대로 입력됐다(같은 기록 113.0·134.5초: 왼손 손등으로 지운 뒤 손바닥으로 돌림).
 SETTLE = 0.3
+# 이 규칙은 기본으로 끈다(PinchTyper.settle = 0, 켜면 SETTLE). Vision Pro에서 손을 뒤집고 바로 손등 검지(모음)를 꼬집으면
+# 쉬는 동안 기준값이 사라져 씹혔고(2026-10-23 단어 기록: 손등 검지 접촉 23번 중 7번), 시연 카메라도 Vision Pro와 비슷한
+# 위치·시야각으로 둘 것이라 카메라 앱과 Vision Pro 앱의 판정값을 통일했다(2026-10-24 사용자 결정).
+SETTLE_DEFAULT = 0.0
+# 주먹 지움을 다시 받는 조건: 주먹이 아닌 상태가 FIST_REARM초 이어짐(손끝 버튼이 다시 펼쳐지는 기준과 같다,
+# common.gestures.FistHold rearm). 주먹을 연달아 쥘 때 손을 반쯤만 펴서 두 번째 주먹부터 지워지지 않았다(Vision Pro
+# 2026-10-24 기록). 카메라 앱도 같은 값을 쓴다(위 사용자 결정).
+FIST_REARM = 0.15
 # 손 방향 확인: 접촉의 처음 STEADY_FRAMES 프레임과 마지막 STEADY_FRAMES 프레임의 손 방향 값(facing) 중앙값이 모두
 # 그 방향(손바닥 ≥ FACING_THRESHOLD, 손등 ≤ -FACING_THRESHOLD)이어야 입력한다.
 # Orientation은 새 방향이 FACING_DWELL초 이어져야 바뀌므로, 손을 뒤집는 순간에는 이전 방향으로 판정된다.
@@ -608,14 +616,14 @@ class PinchTyper:
         self.ime = ime if ime is not None else CheonjiinIME()
         self.hands = {label: HandState(FingerPinch(enter, exit, margin, min_contact, hold=hold),
                                        Orientation(facing_threshold, facing_dwell),
-                                       FistHold(fist_hold, fist_repeat))
+                                       FistHold(fist_hold, fist_repeat, FIST_REARM))
                       for label in HANDS}
         self.pending: Optional[Pending] = None
         self.pinches = []  # 직전 update에서 입력으로 인정된 꼬집기 [(손, 손가락, "palm"|"back")] (기록 모드가 읽는다)
         # 마지막으로 입력된 것 (번호, 손, 표시 글자). 앱이 손바닥 가운데에 잠깐 띄운다(번호가 바뀌면 새 입력).
         self.echo: Optional[tuple] = None
         self.occluded_roll = occluded_roll  # 엄지 가림 기울기 기준(도). pinch_eval이 바꿔 가며 비교한다.
-        self.settle = SETTLE  # 손 방향이 바뀐 뒤 판정을 쉬는 시간(초). 0이면 쉬지 않는다(Vision Pro 설정 창).
+        self.settle = SETTLE_DEFAULT  # 손 방향이 바뀐 뒤 판정을 쉬는 시간(초). 기본 0(쉬지 않음), 켜면 SETTLE(Vision Pro 설정 창)
         self.index_sweep_rule = True  # 오른손 검지 지나감 규칙(INDEX_REPASS)을 쓰는가(Vision Pro 설정 창).
 
     # -- 판정 임계값 ------------------------------------------------------

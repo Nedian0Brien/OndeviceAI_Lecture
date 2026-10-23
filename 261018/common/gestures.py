@@ -76,8 +76,8 @@ class FistHold:
     repeat(초)를 주면 첫 확정 뒤 주먹을 쥐고 있는 동안 repeat초마다 다시 True를 돌려준다(연속 지우기).
     쥔 채 잠깐 "closing"으로 읽히는 프레임에서는 내보내지 않지만 반복을 끊지도 않는다. 손을 펴면 멈춘다.
     rearm(초)을 주면 "open"까지 펴지 않아도 주먹이 아닌 상태(update의 relaxed)가 rearm초 이어지면 다시 센다.
-    Vision Pro는 주먹을 연달아 쥘 때 손을 반쯤만 펴서("closing") 두 번째 주먹부터 지워지지 않았다(2026-10-24 기록:
-    오른손 주먹 구간 20개 중 11개). Mac 카메라는 주먹을 쥔 채로도 0.1~0.4초씩 끊겨 쓰지 않는다(None).
+    Vision Pro는 주먹을 연달아 쥘 때 손을 반쯤만 펴서("closing") 두 번째 주먹부터 지워지지 않았다(2026-10-24 기록).
+    꼬집기 입력기는 카메라·Vision Pro 모두 pinch_typer.FIST_REARM을 쓴다.
     """
 
     def __init__(self, hold=0.18, repeat=None, rearm=None):

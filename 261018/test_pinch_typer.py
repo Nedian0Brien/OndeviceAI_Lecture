@@ -731,7 +731,7 @@ class VisionSessionTest(unittest.TestCase):
         # Vision Pro: 주먹을 연달아 쥘 때 손을 반쯤만 펴도(자세 closing) 주먹이 아닌 상태가 FIST_REARM초 이어지면
         # 다음 주먹으로 다시 지운다. 쥔 채 잠깐 끊기는 것(FIST_REARM 미만)으로는 다시 세지 않는다.
         from common.gestures import FistHold
-        from pinch_vision import FIST_REARM
+        from pinch_typer import FIST_REARM
         for rearm, expected in ((FIST_REARM, 2), (None, 1)):
             fist, now, fired = FistHold(repeat=None, rearm=rearm), 0.0, 0
             frames = ([("open", True)] * 5 + [("fist", False)] * 10 + [("closing", True)] * 2 + [("fist", False)] * 3

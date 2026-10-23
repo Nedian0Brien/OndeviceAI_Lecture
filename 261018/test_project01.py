@@ -122,6 +122,24 @@ class IMETests(unittest.TestCase):
         self.ime.backspace()
         self.assertEqual(self.ime.text, "ㅋ")
 
+    def test_delete_char_removes_whole_jamo(self):
+        """꼬집기 입력기의 지움: 키 입력이 아니라 자모 하나를 통째로(순환한 자음·획을 이은 모음)."""
+        self.type("412" + "000")  # 가 + ㅇ→ㅁ→ㅇ... 0을 세 번: ㅇ ㅁ ㅇ
+        self.assertEqual(self.ime.text, "강")
+        for expected in ("가", "ㄱ", "", ""):
+            self.ime.delete_char()
+            self.assertEqual(self.ime.text, expected)
+        self.ime.backspace()  # 지움도 되살릴 수 있다
+        self.assertEqual(self.ime.text, "ㄱ")
+
+    def test_delete_char_skips_invisible_commit(self):
+        self.type(("4", "1", "2", "COMMIT"))
+        self.ime.delete_char()
+        self.assertEqual(self.ime.text, "ㄱ")
+        self.type(("SPACE",))
+        self.ime.delete_char()
+        self.assertEqual(self.ime.text, "ㄱ")
+
     def test_commit_space_and_newline(self):
         self.type(("4", "COMMIT", "4", "SPACE", "0", "ENTER"))
         self.assertEqual(self.ime.text, "ㄱㄱ ㅇ\n")

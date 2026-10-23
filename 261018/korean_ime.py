@@ -192,6 +192,25 @@ class CheonjiinIME:
                     self.tokens[-1] = edit.last
         self.last_key, self.last_time = None, float("-inf")
 
+    def delete_char(self):
+        """마지막 자모 하나(또는 공백·기호 하나)를 통째로 지운다.
+
+        backspace는 키 입력 한 번을 되돌린다(ㅇ→ㅁ 순환을 ㅇ으로, ㅏ의 ㆍ만 빼 ㅣ로). 꼬집기 입력기의 지움은
+        보이는 자모를 지우는 것으로 기대해서(2026-10-23 사용자 시험) 따로 둔다. 토큰 하나가 자모 하나다
+        (순환한 자음은 토큰을 제자리에서 바꾸고, 획을 이어 만든 모음은 한 토큰에 모인다). 감 → 가 → ㄱ.
+        화면에 보이지 않는 토큰(확정 경계 "")은 함께 뺀다. 지운 뒤에도 backspace로 되살릴 수 있게 history에 남긴다.
+        """
+        text = self.text
+        if not text:
+            return
+        before = [Token(token.kind, token.value, token.key) for token in self.tokens]  # 순환은 토큰을 제자리에서 바꾼다
+        while self.tokens:
+            self.tokens.pop()
+            if compose(self.tokens) != text:
+                break
+        self.history.append(UndoEdit(0, None, before))
+        self.last_key, self.last_time = None, float("-inf")
+
     def clear(self):
         if self.tokens:
             self.history.append(UndoEdit(0, None, self.tokens))

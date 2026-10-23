@@ -68,6 +68,30 @@ def finger_angles(world):
     return tuple(angles)
 
 
+def _joint_angle(a, b, c):
+    """b에서 a와 c로 가는 두 벡터 사이 각도(도). 길이가 0이면 180°(편 상태)로 본다."""
+    first = [x - y for x, y in zip(a, b)]
+    second = [x - y for x, y in zip(c, b)]
+    norm = math.hypot(*first) * math.hypot(*second)
+    if norm < 1e-12:
+        return 180.0
+    return math.degrees(math.acos(max(-1.0, min(1.0, sum(x * y for x, y in zip(first, second)) / norm))))
+
+
+def finger_flex(world):
+    """손가락별 굽힘(도), 검지·중지·약지·소지 순: MCP·PIP·DIP 세 관절의 (180° - 관절 각도) 합. 0이면 펴짐.
+
+    MCP 각도는 손목-MCP-PIP로 잰다. world 좌표(3D)라 카메라 쪽으로 굽힌 손가락도 잡힌다.
+    """
+    wrist = xyz(world[WRIST])
+    flex = []
+    for base in FINGER_MCPS:
+        mcp, pip, dip, tip = (xyz(world[base + i]) for i in range(4))
+        flex.append((180.0 - _joint_angle(wrist, mcp, pip)) + (180.0 - _joint_angle(mcp, pip, dip))
+                    + (180.0 - _joint_angle(pip, dip, tip)))
+    return tuple(flex)
+
+
 def pose_from_angles(angles):
     """`finger_angles` 결과로 자세를 정한다. 기준은 `pose_from_image`와 같은 3개 손가락 규칙이다."""
     curled = sum(angle <= CURL_ANGLE for angle in angles)
@@ -77,6 +101,18 @@ def pose_from_angles(angles):
     if extended >= 3 and curled == 0:
         return "open"
     return "closing"
+
+
+def palm_roll(landmarks, width=1.0, height=1.0):
+    """손의 긴 축을 기준으로 한 기울기(도). 엄지 쪽(검지 뿌리)이 카메라에 가까우면 양수, 소지 쪽이 가까우면 음수.
+
+    소지 뿌리(17) → 검지 뿌리(5) 벡터가 이미지 평면과 이루는 각도다. 이미지 landmark의 z는 손목 기준 상대 깊이로
+    작을수록 카메라에 가깝고, x와 같은 축척(폭)이다. 왼손·오른손, 좌우 반전과 관계없이 같은 부호다.
+    """
+    dx = (landmarks[INDEX_MCP].x - landmarks[PINKY_MCP].x) * width
+    dy = (landmarks[INDEX_MCP].y - landmarks[PINKY_MCP].y) * height
+    dz = (landmarks[INDEX_MCP].z - landmarks[PINKY_MCP].z) * width
+    return math.degrees(math.atan2(-dz, math.hypot(dx, dy)))
 
 
 def palm_facing(landmarks, label, mirrored=False, width=1.0, height=1.0):

@@ -5,9 +5,9 @@
 다시 거쳐야 입력을 받는다. 사라진 순간의 자세로 입력이 나가지 않게 하기 위해서다.
 
 - `TouchGate`: 같은 키에 일정 시간 머무르면 한 번 입력(엄지 마디 앱의 비교 기준 검출기가 쓴다)
-- `FistHold`: 주먹을 일정 시간 유지하면 한 번(지움·확정·공백)
+- `FistHold`: 주먹을 일정 시간 유지하면 한 번(지움·확정·공백). 반복 간격을 주면 쥐고 있는 동안 계속
 - `Orientation`: 손바닥 / 손등 / 회전 중. 순간적인 흔들림을 무시한다.
-- `Kalman1D`: 커서 기준점의 떨림을 줄이는 1차원 칼만 필터
+- `Kalman1D`: 1차원 칼만 필터(손등 마우스 커서에 썼다. 마우스 모드는 2026-10-23 뺐고, 수업 내용 예제로 남긴다)
 """
 
 from typing import Optional
@@ -73,21 +73,30 @@ class FistHold:
     update(pose, now)는 이번 프레임에서 주먹이 확정되면 True를 돌려준다. pose는 common.pose의 자세 이름이다.
     처음 보이는 손이나 유실 후 돌아온 손은 먼저 펴야 한다. 주먹을 쥔 채 나타난 손은 세지 않는다.
     중간에 "closing"이 섞이면 유지 시간을 처음부터 다시 잰다.
+    repeat(초)를 주면 첫 확정 뒤 주먹을 쥐고 있는 동안 repeat초마다 다시 True를 돌려준다(연속 지우기).
+    쥔 채 잠깐 "closing"으로 읽히는 프레임에서는 내보내지 않지만 반복을 끊지도 않는다. 손을 펴면 멈춘다.
     """
 
-    def __init__(self, hold=0.18):
-        self.hold = hold
+    def __init__(self, hold=0.18, repeat=None):
+        self.hold, self.repeat = hold, repeat
         self.lost()
 
     def lost(self):
         self.armed = False
         self.since = None
+        self.next_repeat = None  # 반복 중이면 다음에 내보낼 시각
         self.progress = 0.0  # 주먹 유지 진행 0~1 (화면 표시용)
 
     def update(self, pose, now):
         self.progress = 0.0
         if pose == "open":
-            self.armed, self.since = True, None
+            self.armed, self.since, self.next_repeat = True, None, None
+            return False
+        if self.next_repeat is not None:  # 첫 확정 뒤 쥐고 있는 중
+            self.progress = min(1.0, 1 - (self.next_repeat - now) / self.repeat)
+            if pose == "fist" and now >= self.next_repeat:
+                self.next_repeat = now + self.repeat
+                return True
             return False
         if pose != "fist" or not self.armed:
             self.since = None
@@ -97,6 +106,8 @@ class FistHold:
         self.progress = min(1.0, (now - self.since) / self.hold)
         if self.progress >= 1.0:
             self.armed, self.since = False, None
+            if self.repeat:
+                self.next_repeat = now + self.repeat
             return True
         return False
 

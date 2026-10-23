@@ -16,9 +16,6 @@ https://github.com/user-attachments/assets/b0a4bb92-470f-400b-8aa0-d6bf73dacc56
 
 *Vision Pro 시험 앱(`visionos/`) 화면을 녹화했습니다.*
 
-*시연 영상. 그림을 누르면 열립니다. Vision Pro 시험 앱(`visionos/`) 화면을 녹화했습니다.*
-
-
 ## 파일 구조
 
 ```

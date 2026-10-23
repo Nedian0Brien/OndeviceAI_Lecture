@@ -104,15 +104,3 @@ def assign_hands(detections):
     return {detection[0]: detection for detection in detections[:1]}
 
 
-def session_hand(labels, hand):
-    """녹화·평가 도구용: 프레임의 손 칸(slot) 중 지정한 손(hand)의 번호. 없으면 None.
-
-    녹화할 때 `--hand`로 손을 이미 정했다. 화면에 손이 하나면 좌우 라벨과 상관없이 그 손을 쓴다. 비스듬한
-    카메라에서는 MediaPipe 좌우 라벨이 뒤집힐 수 있기 때문이다. 손이 둘이면 라벨이 맞는 하나만 쓴다.
-    labels: 칸마다 "Left"/"Right"/""(빈 칸)
-    """
-    present = [slot for slot, label in enumerate(labels) if label]
-    if len(present) == 1:
-        return present[0]
-    matching = [slot for slot in present if labels[slot] == hand]
-    return matching[0] if len(matching) == 1 else None

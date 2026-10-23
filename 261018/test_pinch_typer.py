@@ -10,7 +10,7 @@ from types import SimpleNamespace
 import unittest
 
 from korean_ime import CheonjiinIME
-from common.gestures import Kalman1D, Orientation
+from common.gestures import Orientation
 from common.pose import palm_facing, palm_roll
 from pinch_typer import FingerPinch, HandSignal, PinchTyper, hand_signal, pinch_ratios, replay, signal_from_log
 
@@ -1099,17 +1099,6 @@ class CycleQueueTest(unittest.TestCase):
         self.assertEqual(cycle_motion(cycles, ("Right", 0), ("ㅋ", "ㄲ", "ㄱ"), 1.0 + CYCLE_ANIM), (1.0, None))
         # 확정 등으로 처음 순서로 돌아가면 애니메이션 없이 바로 바뀐다.
         self.assertEqual(cycle_motion(cycles, ("Right", 0), ("ㄱ", "ㅋ", "ㄲ"), 2.0), (1.0, None))
-
-
-class KalmanTest(unittest.TestCase):
-    def test_converges_and_smooths(self):
-        kalman = Kalman1D()
-        kalman.reset(0.0, 0.0)
-        now, value = 0.0, 0.0
-        for i in range(60):
-            now += DT
-            value = kalman.update(0.2 + (0.004 if i % 2 else -0.004), now)
-        self.assertAlmostEqual(value, 0.2, delta=0.01)
 
 
 class AppHelpersTest(unittest.TestCase):

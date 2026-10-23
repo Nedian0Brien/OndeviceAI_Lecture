@@ -3,7 +3,7 @@
 실제 카메라 없이 판정기를 검증하려고, 손바닥이 카메라를 향한 편 손을 world 좌표(미터)로 만든다.
 - 손목은 (0, 0.09, 0), 네 손가락 뿌리는 y = 0에서 x = -0.03, -0.01, 0.01, 0.03에 나란히 있다.
 - 손가락은 -y 방향(화면 위쪽)으로 뻗고, 마디 길이는 뿌리 4.5cm · 중간 2.8cm · 끝 2.2cm다.
-- 손바닥 면은 z = 0이다. 엄지 끝 위치(thumb)만 바꿔 가며 누르기·띄우기·꼬집기를 흉내 낸다.
+- 손바닥 면은 z = 0이다. 엄지 끝 위치(thumb)만 바꿔 가며 꼬집기를 흉내 낸다.
 - 이미지 좌표는 world를 4배 해 화면 가운데(0.5, 0.5)에 놓는다. 픽셀 비율이 같도록 x에 HEIGHT/WIDTH를 곱한다.
   z(깊이)는 이미지 x, y에 보이지 않는다. 그래서 엄지를 띄운 것과 누른 것이 화면에서는 같아 보인다.
 """
@@ -12,7 +12,6 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from common.landmarks import SEGMENTS
 
 
 WIDTH, HEIGHT = 640, 480
@@ -67,20 +66,3 @@ def detection(thumb=AWAY, fist=False, mirrored=False):
     return landmark_list(image), landmark_list(world)
 
 
-def middle(name, lift=0.0):
-    """마디 name(예: "I1")의 중점 world 좌표. lift만큼 카메라 쪽(z)으로 띄운다."""
-    a, b = SEGMENTS[name]
-    points = world_hand(np.zeros(3))
-    return (points[a] + points[b]) / 2 + (0.0, 0.0, lift)
-
-
-def tap(name, frames_down=4, lift=0.0):
-    """목표 마디 옆 9mm, 위 4cm에서 내려와 닿은 뒤 같은 길로 떨어지는 엄지 궤적(프레임별 위치 목록).
-
-    화면상으로 다른 마디를 가로지르지 않게 해서 상태 머신만 검증한다. 가로지를 때의 오입력은
-    기록 데이터 평가(tap_eval.py)에서 측정한다.
-    """
-    target = middle(name, lift)
-    start = target + (0.009, 0.0, 0.04)
-    approach = [start + (target - start) * k / 6 for k in range(7)]
-    return approach + [target] * frames_down + approach[::-1]

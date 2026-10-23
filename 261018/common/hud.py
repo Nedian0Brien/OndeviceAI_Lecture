@@ -23,7 +23,6 @@ from pathlib import Path
 
 WHITE = (250, 250, 252, 255)
 MUTED = (230, 231, 236, 215)  # 보조 문구
-DARK_INK = (28, 29, 34, 255)  # 밝게 눌린 버튼 위 글자
 # 선 HUD(꼬집기 입력기, 2026-10-23): 가는 선과 눈금으로 정보를 나타내고 강조는 채도 낮은 파랑 한 가지다.
 # Vision Pro 앱(visionos/PinchKeyboard/HUDStyle.swift)도 같은 값을 쓴다.
 LINE = (236, 240, 248, 225)  # 기본 선

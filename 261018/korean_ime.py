@@ -14,7 +14,7 @@
   다음 글자의 초성으로 옮겨 간다.
 - 지움(backspace)은 마지막 키 입력 한 번을 되돌린다(완성 글자를 통째로 지우지 않는다).
 
-손 동작 판정기(TouchGate·FistHold 등)는 common/gestures.py에 있다.
+손 동작 판정기(손 방향·주먹)는 common/gestures.py에 있다.
 """
 
 from dataclasses import dataclass

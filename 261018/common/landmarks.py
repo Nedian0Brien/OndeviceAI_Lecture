@@ -27,12 +27,6 @@ FINGER_NAMES = ("검지", "중지", "약지", "소지")
 # 손가락 끝마디(DIP→TIP) 선분. 엄지로 손끝을 꼬집을 때 닿는 부분이다.
 DISTAL_SEGMENTS = ((7, 8), (11, 12), (15, 16), (19, 20))
 
-# 손가락 마디 12개. 이름은 손가락(I 검지, M 중지, R 약지, P 소지) + 위치(1 끝, 2 중간, 3 뿌리)다.
-#   끝 마디 = DIP→TIP, 중간 마디 = PIP→DIP, 뿌리 마디 = MCP→PIP
-# 예: "I1" = 검지 끝마디 = (7, 8), "P3" = 소지 뿌리마디 = (17, 18)
-SEGMENTS = {f"{finger}{row}": (base + 3 - row, base + 4 - row)
-            for finger, base in (("I", 5), ("M", 9), ("R", 13), ("P", 17)) for row in (1, 2, 3)}
-SEGMENT_NAMES = tuple(SEGMENTS)
 
 # 화면에 손 골격을 그릴 때 잇는 landmark 쌍
 HAND_CONNECTIONS = tuple(
@@ -62,14 +56,6 @@ def point_segment_distance(point, a, b):
 def to_pixels(landmarks, width, height):
     """이미지 정규화 좌표 landmark 목록 → 픽셀 (x, y) 목록."""
     return [(p.x * width, p.y * height) for p in landmarks]
-
-
-def palm_size(points):
-    """손바닥 크기(픽셀): 검지 뿌리~소지 뿌리 폭과 손목~중지 뿌리 길이 중 큰 값.
-
-    손을 옆으로 돌려 한쪽 길이가 짧아져도 다른 쪽이 남으므로 손 크기 기준으로 안정적이다.
-    """
-    return max(math.dist(points[INDEX_MCP], points[PINKY_MCP]), math.dist(points[WRIST], points[MIDDLE_MCP]))
 
 
 def mean_x(landmarks):

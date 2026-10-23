@@ -10,7 +10,7 @@
 - 안내한 손이 EVAL_MIN_FRAMES 프레임 미만 보인 차례는 평가에서 뺀다(차례가 곧바로 넘어간 경우 등).
 - --occluded-roll: 엄지 가림으로 손바닥 꼬집기를 버리는 기울기 기준(도). -90이면 버리지 않고 판정 결과를 그대로 본다.
 - 단어 기록(--collect-set words)은 단어마다 기대 키 순서(첫 줄 설정)와 실제 꼬집기를 편집 거리로 맞춰
-  맞음 · 다른 손가락 · 더 들어감(오입력) · 빠짐을 키별로 센다. 왼손 손등 편집 키(지움 등)는 사용자가 고친 것이라
+  맞음 · 다른 손가락 · 더 들어감(오입력) · 빠짐을 키별로 센다. 왼손 손등 공백·확정·문장부호(편집 키)는 사용자가 고친 것이라
   맞추기에서 빼고 따로 센다. 지우고 다시 친 키는 맞음으로, 지워진 오입력은 더 들어감으로 잡힌다.
   기록 당시 이 규칙에 막혀 차례가 넘어가지 않았다면(N으로 건너뜀) 그 차례의 꼬집기가 여기서 처음 드러난다.
 """
@@ -20,7 +20,7 @@ import json
 from pathlib import Path
 
 from pinch_collect import FACE_NAMES, FINGER_NAMES, HAND_NAMES, HANDS
-from pinch_typer import (HOLD_TIME, OCCLUDED_ROLL, PINCH_DROP, PINCH_ENTER, PINCH_EXIT, PINCH_MARGIN, PINCH_WINDOW,
+from pinch_typer import (HOLD_TIME, KEYS, OCCLUDED_ROLL, PINCH_DROP, PINCH_ENTER, PINCH_EXIT, PINCH_MARGIN, PINCH_WINDOW,
                          FingerPinch, PinchTyper, signal_from_log)
 
 EVAL_MIN_FRAMES = 15  # 약 0.5초
@@ -70,6 +70,9 @@ def read_config(path):
     return first.get("collect")
 
 
+EDIT_NAMES = {"BACK", "SPACE", "COMMIT", "PUNCT"}  # 단어를 고치거나 끝맺는 키: 기대 키 순서와 맞추지 않고 따로 센다
+
+
 def replay_words(path, occluded_roll=OCCLUDED_ROLL, hold=HOLD_TIME):
     """단어 기록을 재생해 {차례: {"word", "expected": [키], "taps": [키], "edits": 편집 키 수, "live": 기록 당시 결과}}.
 
@@ -99,7 +102,7 @@ def replay_words(path, occluded_roll=OCCLUDED_ROLL, hold=HOLD_TIME):
             item = items.setdefault(prompt["id"], {"word": prompt["word"], "expected": expected[prompt["word"]],
                                                    "taps": [], "edits": 0, "live": None})
             for key in typer.pinches:
-                if key[0] == "Left" and key[2] == "back":
+                if KEYS[(key[0], key[2])][key[1]] in EDIT_NAMES:  # 왼손 손등 공백·확정·문장부호(손등 검지는 모음)
                     item["edits"] += 1
                 else:
                     item["taps"].append(key)

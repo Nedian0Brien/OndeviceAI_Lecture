@@ -88,6 +88,17 @@ class FrameTest(unittest.TestCase):
         run.frames(3, sig(pinched(0), facing=BACK, curled=curled), sig()).frames(3, sig(facing=BACK), sig())
         self.assertEqual(run.kinds("input"), [("input", "ㆍ")])
 
+    def test_short_hand_loss_while_pinching_keeps_contact(self):
+        # 모음을 꼬집고 세로로 끄는 도중 손을 HAND_GAP 안에서 잠깐 놓쳐도 이어서 판정한다. 그보다 오래 놓치면 버린다.
+        for missing, expected in ((3, [("input", "ㅣ")]), (15, [])):  # 0.1초 / 0.5초
+            run = Runner().ready(left_facing=BACK)
+            for k in range(6):
+                if k == 3:
+                    run.frames(missing, None, sig())
+                run.frames(1, sig(pinched(0), facing=BACK, tips=((50.0, 50.0 + 8 * k),) * 5, size=100.0), sig())
+            run.frames(3, sig(facing=BACK), sig())
+            self.assertEqual(run.kinds("input"), expected, missing)
+
     def test_turning_and_flipping_hand_is_ignored(self):
         run = Runner().ready()
         run.frames(4, sig(pinched(0), facing=0.1), sig()).frames(3, sig(facing=0.1), sig())  # 회전 중

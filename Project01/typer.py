@@ -15,6 +15,8 @@
     비교하지 않는다: 뒤집자마자 꼬집으면 그 판정이 아직 이전 방향이다(frame_face).
   - 손바닥 꼬집기는 소지 쪽으로 OCCLUDED_ROLL° 넘게 기울지 않았다(그 자세는 엄지가 가려 손가락을 믿을 수 없다).
   - 오른손 손바닥 검지는 엄지가 지나간 것이 아니다(pinch.FingerPinch.index_sweep).
+
+꼬집는 도중 손이 HAND_GAP초 안에서 사라졌다 돌아오면 사라진 프레임만 건너뛰고 그 접촉을 이어서 판정한다.
 """
 
 from dataclasses import dataclass
@@ -39,6 +41,10 @@ STEADY_FRAMES = 3
 # 엄지 가림: 손바닥에서 소지 쪽이 카메라에 가깝게 OCCLUDED_ROLL°보다 기울면 엄지와 맞닿는 곳이 가려져, MediaPipe가
 # 엄지를 검지 옆에 있다고 추정한다(기운 차례 8개 중 7개가 검지로 틀림). 그 자세의 손바닥 꼬집기는 받지 않는다.
 OCCLUDED_ROLL = -25.0
+# 꼬집는 도중 손 유실: 접촉 중인 손이 HAND_GAP초 이하로 사라지면 그 프레임들은 판정하지 않고 접촉을 이어 간다.
+# 카메라는 손등 꼬집기 87번 중 27번에서 손을 0.03~0.6초 놓쳤다(Vision Pro 53번 중 0번). 기록 24개 재생에서
+# 0.2초면 입력 12개, 0.4초면 20개, 0.6초면 21개가 되살아났다(2026-10-24, words-20261024-042026 등).
+HAND_GAP = 0.4
 ECHO_NAMES = {" ": "공백", "\n": "줄바꿈"}  # 손바닥 가운데 입력 표시(echo)에서 보이지 않는 글자의 이름
 
 
@@ -61,6 +67,7 @@ class HandState:
         self.orientation = Orientation()
         self.fist = FistHold(FIST_HOLD, FIST_REPEAT, FIST_REARM)
         self.signal = None  # 이번 프레임의 HandSignal
+        self.seen: Optional[float] = None  # 마지막으로 신호가 있던 시각(HAND_GAP)
         self.held: list = []  # 이번 접촉 동안의 프레임별 신호(손 방향 확인, 모음 끌기)
 
 
@@ -223,6 +230,7 @@ class PinchTyper:
             hand.fist.lost()
             hand.orientation.lost()
             hand.held = []
+            hand.seen = None
         self.pending = None
 
     def update(self, signals, now):
@@ -230,6 +238,11 @@ class PinchTyper:
         events, self.pinches = [], []
         for label, hand in self.hands.items():
             hand.signal = signals.get(label)
+            if hand.signal is None and hand.pinch.active is not None and hand.seen is not None \
+                    and now - hand.seen <= HAND_GAP:
+                continue  # 꼬집는 도중 손을 잠깐 놓침: 이 프레임은 건너뛰고 손이 돌아오면 접촉을 이어서 판정한다
+            if hand.signal is not None:
+                hand.seen = now
             hand.orientation.update(None if hand.signal is None else hand.signal.facing, now)
             signal, state = hand.signal, hand.orientation.state
             # 손등 꼬집기는 다른 손가락이 굽어도 버리지 않는다. 인정된 방향이나 이번 프레임 방향 중 하나라도 손등이면

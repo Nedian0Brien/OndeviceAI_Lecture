@@ -27,6 +27,10 @@ WARN_YELLOW = (255, 214, 102, 255)
 CYCLE_ANIM = 0.25  # 순환할 때 대기 글자가 한 칸 올라오는 시간(초)
 # 손끝 버튼(직선 도넛): 짧은 직선 DONUT_BARS개를 원형으로 늘어놓는다. 직선은 버튼 반지름의 DONUT_INNER~DONUT_OUTER배.
 DONUT_BARS, DONUT_INNER, DONUT_OUTER = 30, 0.84, 1.04
+# 손끝 버튼 지름: 손끝 사이 가장 좁은 간격 × TIP_SPACING을 640x480 기준 TIP_MIN~TIP_MAX로 자른다. 한 글자 라벨은 지름의
+# TIP_GLYPH배, 여러 글자 라벨(공백·확정 등)은 TIP_WORD 크기. 2026-10-24 Mac 화면에서 글자가 보이지 않아 키웠다(이전 12~21,
+# × 0.75, 0.55, 10): 1280x720 단어 입력 기록에서 지름이 상한 31.5px에 95% 걸려 있었고, 간격으로는 중앙값 62px까지 된다.
+TIP_SPACING, TIP_MIN, TIP_MAX, TIP_GLYPH, TIP_WORD = 0.8, 16, 36, 0.6, 13
 HUB_BARS, HUB_GAP = 96, 70  # 손바닥 원 바깥 막대 링의 막대 수, 손목 쪽에 비워 두는 각도(°)
 HUB_HINT = "주먹 쥐기로 지움"  # 손바닥 원 가운데 문구(주먹을 쥐면 "지움")
 # 손바닥 원 반지름(손 길이 비율): 띠 안쪽·막대 시작·눈금자·바깥 막대 링. 바깥 링이 손가락 뿌리를 넘지 않게 작게 둔다.
@@ -257,7 +261,7 @@ def draw_cycle_queue(canvas, ui, key, points, finger, queue, home, direction, di
     alpha = round(255 * (1 - eased) / 16) * 16
     (cx, cy), (dx, dy) = home, direction
     write(canvas, toward(palm, (cx + dx * lift, cy + dy * lift), spread), previous[0],
-          hud_font(fonts[1], max(8, round(diameter * 0.55))), with_alpha(WHITE, alpha * spread), "mm", True)
+          hud_font(fonts[1], max(8, round(diameter * TIP_GLYPH))), with_alpha(WHITE, alpha * spread), "mm", True)
     return finger_path_point(points, finger, home, 1 / waiting * (1 - eased))
 
 
@@ -270,7 +274,7 @@ def draw_tip_button(canvas, pinch, finger, text, center, diameter, spread, progr
     s = canvas.scale
     px, py = center
     size = diameter * spread
-    word = hud_font(fonts[0], max(8, round(10 * s * spread)))  # 여러 글자 라벨
+    word = hud_font(fonts[0], max(8, round(TIP_WORD * s * spread)))  # 여러 글자 라벨
     radius = max(size, hud_text_width(text, word) + 6 * s * spread) / 2
     inner, outer = radius * DONUT_INNER, radius * DONUT_OUTER
     active = pinch.active == finger
@@ -285,7 +289,7 @@ def draw_tip_button(canvas, pinch, finger, text, center, diameter, spread, progr
     canvas.draw.ellipse((px - inner, py - inner, px + inner, py + inner), fill=fill)
     canvas.ticks((px, py), inner, outer - inner, DONUT_BARS, with_alpha(base, base[3] * spread), lit=lit,
                  lit_color=with_alpha(lit_ink, lit_ink[3] * spread), width=max(1, round(s)), glow=active)
-    write(canvas, (px, py), text, hud_font(fonts[1], max(8, round(size * 0.55))) if len(text) == 1 else word,
+    write(canvas, (px, py), text, hud_font(fonts[1], max(8, round(size * TIP_GLYPH))) if len(text) == 1 else word,
           with_alpha(WHITE, 255 * spread), "mm")
 
 
@@ -333,7 +337,7 @@ def draw_hand(canvas, typer, label, points, ui, fonts, now):
         write(canvas, (x, y), "엄지 쪽을 카메라로 돌려 주세요", canvas.small, WARN_YELLOW, "ma", True)
     tips = [points[tip] for tip in FINGER_TIPS]
     spacing = min(math.dist(a, b) for a, b in zip(tips, tips[1:]))
-    diameter = min(21 * s, max(12 * s, spacing * 0.75))  # 손끝 버튼 지름
+    diameter = min(TIP_MAX * s, max(TIP_MIN * s, spacing * TIP_SPACING))  # 손끝 버튼 지름
     ratios = None if state.signal is None else state.signal.ratios
     progresses = [0.0] * 4 if ratios is None else state.pinch.progress(ratios)
     # 손끝 버튼 펼침: 손바닥 가운데(손목~중지 뿌리 가운데)와 제자리 사이 위치, 크기·불투명도도 함께(spread_motion).

@@ -97,7 +97,10 @@ def run(args):
     last_result, new_word = None, False  # 직전 결과 이벤트, 다음 단어를 시작할 때 입력 칸을 비울지
     if test and args.log is None:
         args.log = DATA / f"words-{time.strftime('%Y%m%d-%H%M%S')}.jsonl"
-    log = open(args.log, "a", encoding="utf-8") if args.log else None
+    log = None
+    if args.log:
+        args.log.parent.mkdir(parents=True, exist_ok=True)  # data/는 저장소에 없다(.gitignore)
+        log = open(args.log, "a", encoding="utf-8")
     if test:
         log.write(json.dumps(test.config(), ensure_ascii=False) + "\n")
         print(f"단어 입력: {len(test.order)}단어 → {args.log}", flush=True)

@@ -1,4 +1,4 @@
-"""손끝 꼬집기 천지인 입력기 (1인칭 카메라 기준).
+"""PinchKeyboard: 손끝 꼬집기 한글 입력기 (1인칭 카메라 기준).
 
 카메라를 눈 위치에 두고 손을 내려다본다. 손바닥이 카메라를 향하면 자음 자판, 손을 뒤집어 손등이 보이면 왼손은
 모음·편집 키, 오른손은 확정/공백 키다. 자판은 layout.py, 판정 규칙은 pinch.py와 typer.py 머리말을 본다.
@@ -34,7 +34,7 @@ from tools.word_test import WordTest
 from typer import PinchTyper, replay
 
 
-WINDOW = "Pinch Cheonjiin"
+WINDOW = "PinchKeyboard"
 FIXTURES = Path(__file__).resolve().with_name("fixtures") / "pinch-typer-keys.json"
 DATA = Path(__file__).resolve().with_name("data")
 

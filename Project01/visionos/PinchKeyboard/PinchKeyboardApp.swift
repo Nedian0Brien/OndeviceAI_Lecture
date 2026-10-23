@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// PinchKeyboard: 손끝 꼬집기 천지인 입력기(Vision Pro). 판정은 앱에 넣은 Python(Project01/visionos/pinch_vision.py와 Project01의 판정 모듈)이 한다.
+/// PinchKeyboard: 손끝 꼬집기 한글 입력기(Vision Pro 시험 앱). 판정은 앱에 넣은 Python(Project01/visionos/pinch_vision.py와 Project01의 판정 모듈)이 한다.
 @main
 struct PinchKeyboardApp: App {
     static let settingsID = "settings"

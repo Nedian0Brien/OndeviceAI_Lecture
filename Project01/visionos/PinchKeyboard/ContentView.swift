@@ -34,7 +34,7 @@ struct ContentView: View {
                 modeButton("자유 입력", systemImage: "keyboard", mode: "free")
                 modeButton("단어 입력", systemImage: "character.book.closed", mode: "words")
             }
-            Text("엄지로 손끝을 꼬집어 천지인으로 입력합니다.\n단어 입력은 짧은 단어를 하나씩 보여 주고, 다 치면 다음 단어로 넘어갑니다.")
+            Text("엄지로 손끝을 꼬집어 한글을 입력합니다.\n단어 입력은 짧은 단어를 하나씩 보여 주고, 다 치면 다음 단어로 넘어갑니다.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

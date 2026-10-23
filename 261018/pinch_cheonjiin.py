@@ -73,6 +73,10 @@ def build_signals(hands, width, height, mirrored):
 # 손끝 라벨
 
 CYCLE_ANIM = 0.25  # 순환할 때 대기 글자가 한 칸 올라오는 시간(초)
+# 손끝 버튼 접기·펼치기: 주먹을 쥐면 SPREAD_CLOSE초에 손바닥 가운데로 모여 사라지고, 손을 편 뒤 SPREAD_HOLD초가 지나면
+# SPREAD_OPEN초에 손끝 자리로 펼쳐진다(사용자, 2026-10-23). SPREAD_HOLD는 주먹 판정이 프레임마다 흔들릴 때 버튼이
+# 들썩이지 않게 한다. Vision Pro 앱(HandLayout.swift SpreadMotion)도 같은 값이다.
+SPREAD_OPEN, SPREAD_CLOSE, SPREAD_HOLD = 0.35, 0.15, 0.15
 
 
 def finger_path_point(points, finger, start, fraction):
@@ -87,6 +91,24 @@ def finger_path_point(points, finger, start, fraction):
             return a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k
         remaining -= length
     return path[-1]
+
+
+def spread_motion(spreads, hand, closed, now):
+    """손끝 버튼 펼침 정도(0 손바닥 가운데에 모여 안 보임 ~ 1 손끝 자리, ease-out 적용).
+
+    spreads: 손별 (선형 진행, 직전 시각, 마지막으로 주먹이던 시각)을 담는 dict(ui["spreads"]). 처음 보이는 손은 0에서
+    시작해 펼쳐진다. closed: 이번 프레임이 주먹 자세인가(FingerPinch.closed).
+    """
+    value, last, closed_at = spreads.get(hand, (0.0, now, None))
+    if closed:
+        closed_at = now
+    step = max(0.0, now - last)
+    if closed_at is not None and now - closed_at < SPREAD_HOLD:
+        value = max(0.0, value - step / SPREAD_CLOSE)
+    else:
+        value = min(1.0, value + step / SPREAD_OPEN)
+    spreads[hand] = (value, now, closed_at)
+    return 1 - (1 - value) ** 3
 
 
 def cycle_motion(cycles, slot, queue, now):
@@ -123,6 +145,9 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         canvas.write(position, text, font, fill, anchor, stroke if outline else 0, OUTLINE if outline else None)
 
     # 손: 얇은 골격선, 손 이름과 방향, 손끝 라벨, 꼬집기 진행, 주먹 진행
+    spreads = ui.setdefault("spreads", {})
+    for gone in set(spreads) - set(hands):  # 안 보이게 된 손은 다시 나타날 때 손바닥에서 펼쳐진다
+        del spreads[gone]
     for label, points in hands.items():
         state = typer.hands[label]
         for a, b in HAND_CONNECTIONS:
@@ -146,6 +171,16 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         diameter = min(26 * s, max(15 * s, spacing * 0.9))
         values = None if state.signal is None else state.signal.ratios
         progresses = [0.0] * 4 if values is None else state.pinch.progress(values)
+        # 손끝 버튼 펼침: 손바닥 가운데(손목~중지 뿌리 가운데)와 제자리 사이 위치, 크기·불투명도도 함께(spread_motion).
+        spread = spread_motion(spreads, label, state.pinch.closed, now)
+        palm = ((points[WRIST][0] + points[MIDDLE_MCP][0]) / 2, (points[WRIST][1] + points[MIDDLE_MCP][1]) / 2)
+
+        def place(point):
+            return palm[0] + (point[0] - palm[0]) * spread, palm[1] + (point[1] - palm[1]) * spread
+
+        def faded(alpha):
+            return WHITE[:3] + (round(alpha * spread),)
+
         for finger in range(4):
             tx, ty = tips[finger]
             dx, dy = tx - points[DISTAL_SEGMENTS[finger][0]][0], ty - points[DISTAL_SEGMENTS[finger][0]][1]
@@ -165,37 +200,42 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
                 def slot_fraction(slot):
                     return slot / waiting
 
-                small_d = diameter * 0.7
+                small_d = diameter * 0.7 * spread
                 wait_font = hud_font(fonts[1], max(8, round(small_d * 0.6)))
                 for slot in range(len(queue) - 1, 0, -1):
                     fraction = slot_fraction(slot)
                     if previous is not None and slot < waiting:  # 한 칸 아래 자리에서 올라오는 중
                         fraction = slot_fraction(slot + 1) + (fraction - slot_fraction(slot + 1)) * eased
-                    wx, wy = finger_path_point(points, finger, (cx, cy), fraction)
+                    wx, wy = place(finger_path_point(points, finger, (cx, cy), fraction))
+                    if spread < 0.05:
+                        continue
                     if previous is not None and slot == waiting:  # 마지막 자리는 손바닥 마디에서 나타난다
                         alpha = round(230 * eased / 16) * 16
-                        write((wx, wy), queue[slot], wait_font, WHITE[:3] + (alpha,), "mm", True)
+                        write((wx, wy), queue[slot], wait_font, faded(alpha), "mm", True)
                         continue
                     glass((wx - small_d / 2, wy - small_d / 2, wx + small_d / 2, wy + small_d / 2), circle=True)
-                    write((wx, wy), queue[slot], wait_font, WHITE[:3] + (215,), "mm")
+                    write((wx, wy), queue[slot], wait_font, faded(215), "mm")
                 if previous is not None:
                     # 방금 입력된 글자: 손끝에서 조금 올라가며 사라진다. 다음 글자는 한 칸 아래에서 손끝으로 올라온다.
                     lift = diameter * 0.8 * eased
                     alpha = round(255 * (1 - eased) / 16) * 16
-                    write((cx + dx / norm * lift, cy + dy / norm * lift), previous[0],
-                          hud_font(fonts[1], max(8, round(diameter * 0.55))), WHITE[:3] + (alpha,), "mm", True)
+                    write(place((cx + dx / norm * lift, cy + dy / norm * lift)), previous[0],
+                          hud_font(fonts[1], max(8, round(diameter * 0.55))), faded(alpha), "mm", True)
                     cx, cy = finger_path_point(points, finger, (cx, cy), slot_fraction(1) * (1 - eased))
-            if ui["tip_labels"] and text:
-                width = max(diameter, hud_text_width(text, small) + 10 * s)
-                bounds = (cx - width / 2, cy - diameter / 2, cx + width / 2, cy + diameter / 2)
-                glass(bounds, circle=width == diameter, hover=progress > 0.5, pressed=active,
+            if ui["tip_labels"] and text and spread >= 0.05:
+                px, py = place((cx, cy))
+                size = diameter * spread
+                word = hud_font(fonts[0], max(8, round(11 * s * spread)))  # 여러 글자 라벨(canvas.small과 같은 크기)
+                width = max(size, hud_text_width(text, word) + 10 * s * spread)
+                bounds = (px - width / 2, py - size / 2, px + width / 2, py + size / 2)
+                glass(bounds, circle=width == size, hover=progress > 0.5, pressed=active,
                       tint=PROMPT_YELLOW if target else None)
-                ink = (28, 29, 34, 255) if active or target else color
-                write((cx, cy), text, hud_font(fonts[1], max(8, round(diameter * 0.55))) if len(text) == 1 else small,
+                ink = (28, 29, 34, 255) if active or target else faded(color[3])
+                write((px, py), text, hud_font(fonts[1], max(8, round(size * 0.55))) if len(text) == 1 else word,
                       ink, "mm")
             if target:
                 canvas.ring((cx, cy), diameter * 0.8, PROMPT_YELLOW, min_width=2)
-            if progress > 0 and not active:
+            if progress > 0 and not active and spread >= 1:
                 canvas.progress_arc((tx, ty), 6 * s, progress, color, max(2, round(2 * s)))
             if active and values is not None:
                 canvas.ring((cx, cy), diameter * 0.72, (237, 242, 250, 90), min_width=2)

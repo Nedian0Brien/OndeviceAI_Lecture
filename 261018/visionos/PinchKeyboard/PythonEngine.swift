@@ -56,6 +56,7 @@ struct PinchState: Decodable {
         var occluded: Bool
         var armed: Bool
         var fist: Double
+        var closed: Bool  // 주먹 자세(손끝 버튼을 접는다)
         var map: [String?]
         var fingers: [Finger]
         var dragging: Int?  // 모음 버튼을 꼬집는 중인 손가락

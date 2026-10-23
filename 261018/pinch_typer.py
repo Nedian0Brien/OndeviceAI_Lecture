@@ -341,11 +341,12 @@ class FingerPinch:
         self.hold_since: Optional[float] = None  # 그 손가락이 HOLD_DEPTH 아래로 내려온 시각
         self.fired: Optional[int] = None  # 이번 접촉에서 유지로 입력된 손가락(뗄 때까지 다시 입력하지 않는다)
         self.counted = False  # 그 입력이 받아들여졌는가(PinchTyper가 버리면 undo_tap이 False로)
+        self.closed = False  # 이번 프레임이 주먹 자세인가(closed 설명)
 
     @property
     def armed(self):
-        """기준값을 잴 프레임이 있는가(처음 보이거나 유실 후 돌아온 손은 한 프레임 뒤부터)."""
-        return bool(self.history) or self.active is not None
+        """기준값을 잴 프레임이 있는가(처음 보이거나 유실 후 돌아온 손은 한 프레임 뒤부터). 주먹을 쥔 손은 편 손으로 친다."""
+        return bool(self.history) or self.active is not None or self.closed
 
     def release_level(self):
         return min(self.exit, self.low[self.active] + RELEASE_RISE)
@@ -374,8 +375,10 @@ class FingerPinch:
     def progress(self, ratios):
         """손가락별 꼬집기 진행(0~1, 화면 표시용): 기준값보다 다가온 정도 / drop. exit 위로 떨어져 있으면 0.
 
-        쉬는 자세에서 원래 가까운 손가락은 다가오지 않았으므로 0에 머문다(판정 규칙과 같은 기준).
+        쉬는 자세에서 원래 가까운 손가락은 다가오지 않았으므로 0에 머문다(판정 규칙과 같은 기준). 주먹이면 0.
         """
+        if self.closed:
+            return [0.0] * 4
         if self.active is not None:
             base = self.base
         elif self.history:
@@ -483,10 +486,23 @@ class FingerPinch:
         if signal.pose == "fist" or others >= SPOIL_CURLED:
             self.spoiled = True
 
+    @staticmethod
+    def closed_pose(signal):
+        """주먹 자세인가: 자세 판정이 주먹이거나 네 손가락이 모두 굽음. 소지를 꼬집으면 중지·약지가 함께 굽지만 검지는
+        펴져 있어(curled 0111) 여기 들지 않는다(SPOIL_CURLED 설명)."""
+        return signal.pose == "fist" or all(signal.curled)
+
     def update(self, signal, now):
         if signal is None:
             self.lost()
             return None
+        if self.closed_pose(signal):
+            # 주먹을 쥐고 있는 동안은 꼬집기 거리를 보지 않는다: 엄지가 손가락 위에 놓여 거리가 가까워지고, 다가옴 표시가
+            # 켜졌다 꺼졌다 했다(사용자, 2026-10-23 Vision Pro). 진행 중인 접촉은 버리고, 손을 펴면 기준값을 새로 쌓는다.
+            self.lost()
+            self.closed = True
+            return None
+        self.closed = False
         self.released = None
         ratios = signal.ratios
         if self.active is None:

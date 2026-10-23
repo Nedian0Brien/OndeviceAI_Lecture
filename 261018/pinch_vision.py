@@ -14,7 +14,7 @@ step 출력(Mac 앱 HUD가 그리는 것과 같은 정보, pinch_cheonjiin.draw_
    "pending_punct": 후보가 문장부호인가(밑줄 없음),
    "group": 순환 중인 그룹 글자 목록 또는 null, "group_index": 그룹에서 지금 글자 위치,
    "hold_mode": 누르고 유지 방식인가,
-   "hands": {손: {"face", "occluded", "armed", "fist",
+   "hands": {손: {"face", "occluded", "armed", "fist", "closed": 주먹 자세라 꼬집기를 보지 않는가(앱은 손끝 버튼을 접는다),
                   "dragging": 모음 버튼을 꼬집는 중인 손가락 번호 또는 null(그동안 앱이 끄는 궤적을 그린다),
                   "drag_frames": 판정에 쓰는 이번 접촉의 프레임 수(이 손이 보인 마지막 프레임들. 앱은 같은 프레임의
                                  관절로 궤적을 그린다), "drag_radius": 끌기 기준 거리(m, 손 크기 × DRAG_MIN),
@@ -102,6 +102,7 @@ class Session:
                 "occluded": typer.occluded(label),
                 "armed": hand.pinch.armed,
                 "fist": hand.fist.progress,
+                "closed": hand.pinch.closed,
                 "dragging": None if drag is None else drag["finger"],
                 "drag_frames": 0 if drag is None else len(drag["points"]),
                 "drag_radius": 0.0 if drag is None else round(DRAG_MIN * drag["size"] / IMAGE_SCALE, 4),

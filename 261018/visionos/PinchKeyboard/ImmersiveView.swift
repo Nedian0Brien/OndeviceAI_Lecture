@@ -91,12 +91,21 @@ enum HUDPlacement {
                 placements["\(hand)-dragring"] = start
                 placements["\(hand)-dragbadge"] = end + layout.forward * layout.diameter * 2.6
             }
+            // 손끝 버튼 펼침: 손바닥 가운데와 제자리 사이(주먹이면 모여 사라지고, 펴면 펼쳐진다. Mac spread_motion).
+            let spread = Float(model.spreads[hand] ?? 0)
+            guard spread >= 0.05 else {
+                continue
+            }
+            let palm = layout.palmCenter
+            func place(_ point: SIMD3<Float>) -> SIMD3<Float> {
+                palm + (point - palm) * spread
+            }
             for finger in 0..<4 {
                 guard let state = info.fingers[safe: finger], !state.queue.isEmpty else {
                     continue
                 }
                 let id = "\(hand)-\(finger)"
-                if state.approach > 0 && !state.active {  // 다가옴 호는 버튼 표시라 항상(사용자, 2026-10-23)
+                if state.approach > 0 && !state.active && spread >= 1 {  // 다가옴 호는 버튼 표시라 항상(사용자, 2026-10-23)
                     placements["\(id)-arc"] = layout.tip(finger)
                 }
                 var center = layout.labelCenter(finger)
@@ -109,16 +118,16 @@ enum HUDPlacement {
                         if previous != nil && slot < waiting {  // 한 칸 아래 자리에서 올라오는 중
                             fraction = Float(slot + 1) * step + (fraction - Float(slot + 1) * step) * Float(eased)
                         }
-                        placements["\(id)-q\(slot)"] = layout.pathPoint(finger, fraction: fraction)
+                        placements["\(id)-q\(slot)"] = place(layout.pathPoint(finger, fraction: fraction))
                     }
                     if previous != nil {
                         // 방금 입력된 글자는 손끝에서 조금 올라가며 사라지고, 다음 글자는 한 칸 아래에서 손끝으로 올라온다.
                         let lift = layout.diameter * 0.8 * Float(eased)
-                        placements["\(id)-prev"] = center + layout.tipDirection(finger) * lift
+                        placements["\(id)-prev"] = place(center + layout.tipDirection(finger) * lift)
                         center = layout.pathPoint(finger, fraction: step * Float(1 - eased))
                     }
                 }
-                placements["\(id)-tip"] = center
+                placements["\(id)-tip"] = place(center)
             }
         }
         return placements
@@ -304,6 +313,7 @@ struct TipLabelView: View {
             }
             .frame(width: metrics.diameter * 1.6, height: metrics.diameter * 1.6)
             .padding(4 * metrics.unit)  // 첨부 뷰는 자기 크기만큼 잘려 그려진다: 진행 호 선 두께만큼 여백
+            .modifier(SpreadFade(hand: hand))
         }
     }
 }
@@ -346,6 +356,7 @@ struct WaitingLetterView: View {
                 .background(appearing ? nil : GlassShape(circle: true, lineWidth: max(1, metrics.unit)))
                 .modifier(OutlineIf(appearing))
                 .padding(3 * metrics.unit)  // 테두리·외곽선 그림자가 잘리지 않게
+                .modifier(SpreadFade(hand: hand))
         }
     }
 }
@@ -366,6 +377,7 @@ struct RisingLetterView: View {
                 .foregroundStyle(HUD.white.opacity(1 - eased))
                 .outlined()
                 .padding(4 * metrics.unit)  // 외곽선 그림자가 잘리지 않게
+                .modifier(SpreadFade(hand: hand))
         }
     }
 }
@@ -450,6 +462,19 @@ struct DragBadgeView: View {
                                        lineWidth: max(1, metrics.unit)))
                 .padding(3 * metrics.unit)  // 테두리·외곽선 그림자가 잘리지 않게
         }
+    }
+}
+
+/// 손끝 버튼 펼침 정도만큼 크기·불투명도를 줄인다(주먹이면 손바닥 가운데로 모여 사라짐).
+private struct SpreadFade: ViewModifier {
+    @Environment(AppModel.self) private var model
+    let hand: String
+
+    func body(content: Content) -> some View {
+        let spread = model.spreads[hand] ?? 0
+        content
+            .scaleEffect(spread)
+            .opacity(spread)
     }
 }
 

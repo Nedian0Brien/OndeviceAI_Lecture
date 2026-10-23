@@ -100,6 +100,29 @@ class FixtureTest(unittest.TestCase):
 class FingerPinchTest(unittest.TestCase):
     """손가락 고르기·떼기 규칙(뗄 때 입력, hold=0)."""
 
+    def test_fist_ignores_pinch_distance(self):
+        # 주먹을 쥐고 있으면(엄지가 손가락 위에 놓여 비율이 낮아도) 다가옴 표시가 0이고 꼬집기를 판정하지 않는다.
+        # 편 손으로 친다(손을 펴라는 안내 없음). 손을 펴면 다시 꼬집을 수 있다.
+        pinch, now = FingerPinch(), 0.0
+        for _ in range(10):
+            now += DT
+            pinch.update(sig(), now)
+        fist = sig((0.10, 0.12, 0.3, 0.4), pose="fist", curled=(True,) * 4)
+        curled = sig((0.10, 0.12, 0.3, 0.4), pose="closing", curled=(True,) * 4)
+        taps = []
+        for signal in (fist, curled) * 6:
+            now += DT
+            taps.append(pinch.update(signal, now))
+            self.assertEqual((pinch.progress(signal.ratios), pinch.active, pinch.armed), ([0.0] * 4, None, True))
+        for _ in range(3):
+            now += DT
+            taps.append(pinch.update(sig(), now))
+        self.assertEqual([t for t in taps if t], [])
+        for ratios in [pinch_ratios_for(0)] * 4 + [OPEN] * 3:
+            now += DT
+            taps.append(pinch.update(sig(ratios), now))
+        self.assertEqual([t[0] for t in taps if t], [0])
+
     def test_counts_on_release(self):
         pinch, now, events = FingerPinch(hold=0), 0.0, []
         for ratios in [OPEN] * 3 + [pinch_ratios_for(1)] * 4 + [OPEN] * 2:
@@ -698,6 +721,8 @@ class VisionSessionTest(unittest.TestCase):
         outputs, _ = self.run_frames(session, [meters(open_hand)] * 25 + [meters(fist)] * 10 + [meters(open_hand)] * 3)
         self.assertIn(["delete", None], [e for out in outputs for e in out["events"]])
         self.assertEqual(outputs[-1]["text"], "")
+        closed = [out["hands"]["Left"]["closed"] for out in outputs]
+        self.assertEqual((closed[24], any(closed[25:35]), closed[-1]), (False, True, False))  # 주먹 동안만 접힘
 
     def test_vowel_drag_state(self):
         # 모음 버튼(왼손 손등 검지)을 꼬집은 채 아래로 끌면, 꼬집는 동안 끌기 상태(프레임 수·기준 거리 m·미리 볼 획)가
@@ -923,6 +948,28 @@ class CycleQueueTest(unittest.TestCase):
         self.assertEqual(finger_path_point(points, 0, start, 0.0), start)
         self.assertEqual(finger_path_point(points, 0, start, 1.0), (10.0, 100.0))
         self.assertEqual(finger_path_point(points, 0, start, 0.5), (10.0, 55.0))
+
+    def test_spread_folds_on_fist_and_unfolds_after_hold(self):
+        # 손끝 버튼: 처음 보이는 손은 0에서 펼쳐지고, 주먹이면 SPREAD_CLOSE초에 접히고, 편 뒤 SPREAD_HOLD초가 지나야
+        # SPREAD_OPEN초에 다시 펼쳐진다. 주먹 판정이 한 프레임씩 흔들려도 접힌 채로 있다.
+        from pinch_cheonjiin import SPREAD_CLOSE, SPREAD_HOLD, SPREAD_OPEN, spread_motion
+        spreads = {}
+        self.assertEqual(spread_motion(spreads, "Left", False, 0.0), 0.0)
+        self.assertEqual(spread_motion(spreads, "Left", False, SPREAD_OPEN), 1.0)
+        t = SPREAD_OPEN
+        for k in range(1, 7):  # 주먹 / 주먹 아님이 번갈아 읽힘
+            t += SPREAD_CLOSE / 4
+            value = spread_motion(spreads, "Left", k % 2 == 1, t)
+        self.assertEqual(value, 0.0)
+        opened = t
+        values = []
+        while t < opened + SPREAD_HOLD + SPREAD_OPEN + 0.1:  # 편 뒤 30fps로
+            t += DT
+            values.append((t - opened, spread_motion(spreads, "Left", False, t)))
+        self.assertTrue(all(v == 0.0 for dt, v in values if dt < SPREAD_HOLD - DT))  # 편 직후: 접힌 채
+        half = next(v for dt, v in values if dt >= SPREAD_HOLD + DT + SPREAD_OPEN / 2)
+        self.assertTrue(0.5 < half < 1.0, half)  # ease-out: 절반 시간에 절반보다 많이
+        self.assertEqual(values[-1][1], 1.0)
 
     def test_motion_only_when_queue_turns(self):
         from pinch_cheonjiin import CYCLE_ANIM, cycle_motion

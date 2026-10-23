@@ -37,6 +37,8 @@ final class AppModel {
     var layouts: [String: HandLayout] = [:]  // 손 → 이번 프레임 배치
     var frameTime: Double = 0  // 이번 프레임 시각(순환 애니메이션)
     var cycles: [String: CycleMotion] = [:]  // "Left-0" → 순환 애니메이션 상태
+    var spreads: [String: Double] = [:]  // 손 → 손끝 버튼 펼침 정도(0 손바닥 가운데에 접힘 ~ 1 제자리)
+    private var spreadMotions: [String: SpreadMotion] = [:]
     /// 모음 끌기 궤적(월드 m): 손 → 꼬집은 지점(엄지 끝과 손끝의 가운데) 목록. 판정 Python이 끌기에 쓰는 프레임과
     /// 같은 프레임들이다(dragFrames). 모음 버튼을 꼬집는 동안만 있다.
     var trails: [String: [SIMD3<Float>]] = [:]
@@ -111,6 +113,8 @@ final class AppModel {
         layouts = [:]
         trails = [:]
         history = [:]
+        spreads = [:]
+        spreadMotions = [:]
         Task {
             await command("log_stop")
             status = "손 입력 멈춤 · 기록 저장됨"
@@ -131,6 +135,7 @@ final class AppModel {
             apply(await engine.call("step", Self.payload(time: frameStart, hands: hands)))
             layouts = hands.mapValues { HandLayout(points: $0.world) }
             trails = dragTrails()
+            updateSpreads(now: frameStart)
             let rest = 1.0 / 45.0 - (CACurrentMediaTime() - frameStart)
             try? await Task.sleep(for: .seconds(max(0.002, rest)))
         }
@@ -155,6 +160,18 @@ final class AppModel {
         }
         if let notice = decoded.notice {
             status = notice
+        }
+    }
+
+    /// 손끝 버튼 펼침: 보이는 손마다 갱신하고, 안 보이게 된 손은 지워 다시 나타나면 손바닥에서 펼쳐지게 한다.
+    private func updateSpreads(now: Double) {
+        for hand in Self.hands {
+            guard layouts[hand] != nil, let info = state.hands?[hand] else {
+                spreadMotions[hand] = nil
+                spreads[hand] = nil
+                continue
+            }
+            spreads[hand] = spreadMotions[hand, default: SpreadMotion()].update(closed: info.closed, now: now)
         }
     }
 

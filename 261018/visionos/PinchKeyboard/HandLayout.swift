@@ -77,6 +77,32 @@ struct HandLayout {
     }
 }
 
+/// 손끝 버튼 접기·펼치기(Mac spread_motion과 같은 값): 주먹이면 0.15초에 손바닥 가운데로 모여 사라지고, 편 뒤
+/// 0.15초가 지나면 0.35초에 손끝 자리로 펼쳐진다. 처음 보이는 손은 0에서 시작한다.
+struct SpreadMotion {
+    static let open = 0.35
+    static let close = 0.15
+    static let hold = 0.15
+    var value = 0.0  // 선형 진행
+    var last: Double? = nil
+    var closedAt: Double? = nil
+
+    /// 이번 프레임의 펼침 정도(ease-out, 0~1).
+    mutating func update(closed: Bool, now: Double) -> Double {
+        if closed {
+            closedAt = now
+        }
+        let step = max(0, now - (last ?? now))
+        if let closedAt, now - closedAt < Self.hold {
+            value = max(0, value - step / Self.close)
+        } else {
+            value = min(1, value + step / Self.open)
+        }
+        last = now
+        return 1 - pow(1 - value, 3)
+    }
+}
+
 /// 순환 애니메이션(Mac cycle_motion): 대기열이 한 칸 돌았을 때만 0.25초 동안 ease-out으로 움직인다.
 struct CycleMotion {
     static let duration = 0.25

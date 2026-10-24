@@ -4,8 +4,8 @@ import json
 import random
 from types import SimpleNamespace
 
-from hand import FINGER_NAMES, HandSignal, finger_flex, image_tips, palm_roll
-from keyboard import CONSONANTS, FINALS, HANDS, INITIALS, KEYS, MEDIALS, SPLIT_FINALS, VOWELS, PinchTyper
+from keyboard import (CONSONANTS, FINALS, FINGER_NAMES, HANDS, INITIALS, KEYS, MEDIALS, SPLIT_FINALS, VOWELS, HandSignal,
+                      PinchTyper, finger_flex, image_tips, palm_roll)
 
 
 # --- 프레임 기록 ---

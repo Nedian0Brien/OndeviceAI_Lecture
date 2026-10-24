@@ -10,9 +10,9 @@ import time
 
 import cv2
 
-from hand import assign_hands, create_detector, detect_hands, detection_frame, hand_signal
+from hand import assign_hands, create_detector, detect_hands, detection_frame
 from hud import draw_hud, load_fonts
-from keyboard import PinchTyper, replay
+from keyboard import PinchTyper, hand_signal, replay
 from record import WordTest, log_row, read_config, replay_prompts, replay_words, report_prompts, report_words
 
 

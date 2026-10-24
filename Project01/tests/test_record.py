@@ -3,8 +3,8 @@
 import json
 import unittest
 
-from hand import Detection, assign_hands, hand_signal
-from keyboard import replay
+from hand import Detection, assign_hands
+from keyboard import hand_signal, replay
 from record import COMMIT, REST, SHORT_WORDS, WordTest, align, log_row, signal_from_log, word_steps
 from tests.helpers import detection
 

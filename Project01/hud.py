@@ -9,8 +9,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from hand import DISTAL_SEGMENTS, FINGER_MCPS, FINGER_TIPS, HAND_CONNECTIONS, MIDDLE_MCP, THUMB_TIP, WRIST
-from keyboard import DRAG_MIN, DRAG_STROKES, KEYS, VOWELS, cycle_queue, group_of, key_label
+from keyboard import (DISTAL_SEGMENTS, DRAG_MIN, DRAG_STROKES, FINGER_MCPS, FINGER_TIPS, HAND_CONNECTIONS, KEYS,
+                      MIDDLE_MCP, THUMB_TIP, VOWELS, WRIST, cycle_queue, group_of, key_label)
 
 
 # 색은 (R, G, B, 불투명도)임. 가는 선과 눈금으로 정보를 나타내고 강조색은 파랑 한 가지만 씀

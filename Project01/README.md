@@ -25,6 +25,7 @@ Project01/
 ├── keyboard.py     천지인 한글 조합, 자판 배치, 손 방향·주먹·핀치 판정, 양손 입력기(PinchTyper)
 ├── hud.py          카메라 영상 위 화면(손끝 버튼, 손바닥 원형 표시, 입력 줄, 도움말)
 ├── record.py       프레임 기록(--log), 단어 입력 시험(--words), 기록 재생 채점
+├── visionos/       확장: Vision Pro 시험 앱(PinchKeyboard). 아래 "창의성 및 확장성" 참고
 ├── tests/          단위 테스트(카메라 없이 실행)
 └── fixtures/       고정 데이터: 키 입력 시퀀스와 정답(pinch-typer-keys.json), 실제 손 관절(handedness.json)
 ```
@@ -47,9 +48,10 @@ flowchart LR
     DET --> SIG
     TYP --> HUD
     LOG["기록 재생·채점<br/>record.py"] --> SIG
+    VP["Vision Pro 손 추적<br/>visionos/pinch_vision.py"] --> SIG
 ```
 
-판정 코드(`keyboard.py`)는 손 신호만 입력으로 받습니다. 덕분에 카메라 앱, 기록 재생, 테스트가 모두 같은 코드를 씁니다.
+판정 코드(`keyboard.py`)는 손 신호만 입력으로 받습니다. 덕분에 카메라 앱, 기록 재생, 테스트, Vision Pro 앱이 모두 같은 코드를 씁니다.
 
 ## 실행 방식
 
@@ -147,7 +149,7 @@ python Project01/main.py --camera 0 --log Project01/data/free.jsonl   # 프레�
 
 ```bash
 cd Project01
-python -m unittest discover -s tests -t .                # 단위 테스트 65개, 카메라 없이 실행
+python -m unittest discover -s tests -t .                # 단위 테스트 73개, 카메라 없이 실행
 python main.py --evaluate data/words-*.jsonl -v          # --words로 남긴 기록을 지금 판정으로 다시 재생
 ```
 
@@ -158,6 +160,7 @@ python main.py --evaluate data/words-*.jsonl -v          # --words로 남긴 기
 | `test_hud.py` | 화면 애니메이션(펼침·순환·입력 표시), 둥근 사각형, 빈 프레임에 화면 그리기 |
 | `test_record.py` | 단어 60개 모두 기대 키 순서로 칠 수 있는지, 단어 시험 흐름, 기록 한 줄 재생, 키 순서 맞추기 |
 | `test_main.py` | 해상도 옵션, 단어 안내 문구 |
+| `test_vision_session.py` | Vision Pro 판정 세션(합성 손으로 입력·주먹·모음 끌기·단어 모드·기록) |
 
 `test_hud.py`의 화면 테스트는 한글 글꼴이 있어야 돌아갑니다.
 
@@ -292,7 +295,7 @@ flowchart TB
 
 처음 시도한 세 가지 입력 방식은 모두 실패했습니다(Discussion 1). 손끝 핀치로 정한 뒤로는 직접 써 보며 불편한 점을 찾고, 정답과 함께 기록하고, 규칙을 고친 다음 같은 기록으로 다시 확인하는 과정을 계속 반복했습니다. 자판 배치도 이 과정에서 여러 번 바뀌었습니다.
 
-1인칭 시점 테스트에는 Apple Vision Pro를 썼습니다. 카메라를 눈 근처에 고정할 방법이 없었기 때문입니다. Vision Pro가 잡은 손 관절을 MediaPipe 21점 순서로 바꿔 넘기면, 앱에 넣은 Python이 `Project01/`의 판정 모듈을 그대로 돌립니다. 손을 뒤집자마자 친 모음이 빠지던 문제, 주먹을 연달아 쥘 때 두 번째 지움이 안 되던 문제는 이 앱의 기록으로 찾아 고쳤습니다. 과제의 본체는 카메라 앱(`main.py`)이고 Vision Pro 앱은 개발·테스트용 PoC입니다. Swift로 된 손 추적·화면 부분은 AI 도구로 작성했습니다(`main` 브랜치의 `Project01/visionos/`).
+1인칭 시점 테스트에는 Apple Vision Pro를 썼습니다. 카메라를 눈 근처에 고정할 방법이 없었기 때문입니다. Vision Pro가 잡은 손 관절을 MediaPipe 21점 순서로 바꿔 넘기면, 앱에 넣은 Python이 `Project01/`의 판정 모듈을 그대로 돌립니다. 손을 뒤집자마자 친 모음이 빠지던 문제, 주먹을 연달아 쥘 때 두 번째 지움이 안 되던 문제는 이 앱의 기록으로 찾아 고쳤습니다. 과제의 본체는 카메라 앱(`main.py`)이고 Vision Pro 앱은 개발·테스트용 PoC입니다. Swift로 된 손 추적·화면 부분은 AI 도구로 작성했습니다([visionos/README.md](visionos/README.md)).
 
 마지막으로 두 앱의 판정값을 하나로 맞추고, 실험 기능을 지우고, 코드를 역할별 모듈로 나눴습니다.
 
@@ -346,7 +349,7 @@ flowchart TB
 
 - 카메라 한 대와 MediaPipe 손 관절만으로 한글 자모 40개와 문장부호를 모두 입력할 수 있습니다. 동작은 핀치, 손 뒤집기, 끌기, 주먹 쥐기 네 가지이고 양손 열 손가락을 다 씁니다.
 - 카메라로 남긴 정답 기록(손가락 차례 기록 7개, 117차례)을 지금 판정으로 다시 돌리면, 첫 입력이 맞은 차례가 100차례(85.5%)입니다. 다른 손가락으로 잘못 들어간 입력은 4번뿐이고, 틀린 경우는 대부분 입력이 아예 안 된 경우(15차례)였습니다.
-- 판정 코드를 카메라와 분리해 둔 덕에 Vision Pro 손 추적에서도 같은 코드가 그대로 돌았습니다. 판정과 한글 조합은 카메라 없이 도는 단위 테스트 65개로 검증합니다.
+- 판정 코드를 카메라와 분리해 둔 덕에 Vision Pro 손 추적에서도 같은 코드가 그대로 돕니다. 판정과 한글 조합은 카메라 없이 도는 단위 테스트 73개로 검증합니다.
 
 **기대효과**
 

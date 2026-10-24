@@ -4,8 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from hand import HandSignal
-from keyboard import PinchTyper
+from keyboard import HandSignal, PinchTyper
 
 DT = 1 / 30
 OPEN = (0.6, 0.6, 0.65, 0.7)  # 편 손의 검지·중지·약지·소지 핀치 거리
@@ -23,22 +22,44 @@ def pinched(finger, value=0.08):
     return tuple(ratios)
 
 
-def detection(fist=False, mirrored=False):
-    """손바닥이 카메라를 향한 합성 손의 (영상 관절, world 관절)을 만드는 함수"""
+AWAY = (-0.08, 0.08, 0.05)  # 엄지를 모든 손끝에서 멀리 둔 위치(m)
+
+
+def world_hand(thumb=AWAY):
+    """엄지 끝이 thumb에 있고 손바닥이 카메라를 향한 합성 손의 world 좌표(21, 3)를 만드는 함수"""
     # 손목은 (0, 0.09, 0), 네 손가락 뿌리는 y = 0에 나란히 있고 손가락은 화면 위쪽으로 뻗음(단위 m)
     world = np.zeros((21, 3))
     world[0] = (0.0, 0.09, 0.0)
-    world[1:5] = [(-0.04, 0.07, 0.0), (-0.055, 0.05, 0.0), (-0.06, 0.03, 0.0), (-0.08, 0.08, 0.05)]
+    world[1:4] = [(-0.04, 0.07, 0.0), (-0.055, 0.05, 0.0), (-0.06, 0.03, 0.0)]
     for base, x in {5: -0.03, 9: -0.01, 13: 0.01, 17: 0.03}.items():
         y = 0.0
         world[base] = (x, y, 0.0)
         for step, length in enumerate((0.045, 0.028, 0.022), start=1):
             y -= length
             world[base + step] = (x, y, 0.0)
-        if fist:  # 손가락을 뿌리 가까이 접음
-            world[base + 1:base + 4] = world[base] + [(0.0, -0.03, 0.0), (0.0, -0.02, -0.02), (0.0, 0.005, -0.015)]
-    # 영상 좌표는 world를 4배 해서 화면 가운데에 놓고, 픽셀 비율이 같도록 x에 480/640을 곱함
-    image = np.column_stack([0.5 + world[:, 0] * 4 * 480 / 640, 0.5 + world[:, 1] * 4, world[:, 2] * 4])
+    world[4] = thumb
+    return world
+
+
+def fold_fist(world):
+    """합성 손의 네 손가락을 뿌리 가까이 접어 주먹으로 바꾸는 함수"""
+    for base in (5, 9, 13, 17):
+        world[base + 1:base + 4] = world[base] + [(0.0, -0.03, 0.0), (0.0, -0.02, -0.02), (0.0, 0.005, -0.015)]
+    return world
+
+
+def to_image(world):
+    """합성 손의 world 좌표를 영상 비율 좌표로 바꾸는 함수"""
+    # world를 4배 해서 화면 가운데에 놓고, 픽셀 비율이 같도록 x에 480/640을 곱함
+    return np.column_stack([0.5 + world[:, 0] * 4 * 480 / 640, 0.5 + world[:, 1] * 4, world[:, 2] * 4])
+
+
+def detection(fist=False, mirrored=False):
+    """합성 손의 (영상 관절, world 관절)을 관절 객체 목록으로 만드는 함수"""
+    world = world_hand()
+    if fist:
+        fold_fist(world)
+    image = to_image(world)
     if mirrored:
         image[:, 0] = 1 - image[:, 0]
     return ([SimpleNamespace(x=x, y=y, z=z) for x, y, z in image],

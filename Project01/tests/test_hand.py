@@ -1,4 +1,4 @@
-"""hand.py의 손 검출 라벨, 손 배정, 자세, 손 방향, 핀치 거리 테스트"""
+"""hand.py의 손 검출 라벨과 손 배정, keyboard.py의 손 신호(자세, 손 방향, 핀치 거리) 테스트"""
 
 import json
 from pathlib import Path
@@ -7,8 +7,8 @@ import unittest
 
 import numpy as np
 
-from hand import (Detection, assign_hands, detect_hands, detection_frame, hand_signal, palm_facing, palm_roll,
-                  pinch_ratios, pose_from_image)
+from hand import Detection, assign_hands, detect_hands, detection_frame
+from keyboard import hand_signal, palm_facing, palm_roll, pinch_ratios, pose_from_image
 from tests.helpers import detection
 
 

@@ -45,7 +45,7 @@ class RecordingTest(unittest.TestCase):
     def test_log_row_keeps_landmarks_and_replays(self):
         image, world = detection()
         hands = assign_hands([Detection("Left", image, world)])
-        signals = {role: hand_signal(h.label, h.landmarks, h.world, False, 640, 480) for role, h in hands.items()}
+        signals = {role: hand_signal(h.label, h.landmarks, h.world, 640, 480) for role, h in hands.items()}
         row = json.loads(json.dumps(log_row(1.0, hands, signals, [], 640, 480), ensure_ascii=False))
         hand = row["hands"]["Left"]
         self.assertNotIn("prompt", row)

@@ -29,18 +29,14 @@ def create_detector(model):
     return vision.HandLandmarker.create_from_options(options)
 
 
-def detect_hands(detector, frame, timestamp, mirrored):
+def detect_hands(detector, frame, timestamp):
     """BGR 프레임에서 손을 찾아 Detection 목록을 돌려주는 함수"""
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     result = detector.detect_for_video(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb), timestamp)
     detections = []
     for landmarks, world, handedness in zip(result.hand_landmarks, result.hand_world_landmarks, result.handedness):
-        label = handedness[0].category_name
-        # MediaPipe Tasks는 입력 영상에 보이는 그대로의 손을 라벨로 냄(1.1.1, 공식 테스트 이미지로 확인)
-        # 그래서 영상을 좌우 반전했을 때만 라벨을 뒤집음. 이 라벨이 틀리면 손바닥과 손등이 뒤바뀜
-        if mirrored:
-            label = "Left" if label == "Right" else "Right"
-        detections.append(Detection(label, landmarks, world))
+        # MediaPipe Tasks는 입력 영상에 보이는 그대로의 실제 손을 라벨로 냄(1.1.1, 공식 테스트 이미지로 확인)
+        detections.append(Detection(handedness[0].category_name, landmarks, world))
     return detections
 
 

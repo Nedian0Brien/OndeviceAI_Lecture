@@ -22,16 +22,13 @@ def flat_points(index_x, pinky_x):
 
 
 class DetectionTest(unittest.TestCase):
-    def test_label_kept_for_unmirrored_and_swapped_for_mirrored(self):
+    def test_label_is_mediapipe_handedness(self):
         point = SimpleNamespace(x=0.5, y=0.5, z=0.0)
-        for raw, mirrored, expected in (("Right", False, "Right"), ("Left", False, "Left"),
-                                        ("Right", True, "Left"), ("Left", True, "Right")):
+        for label in ("Right", "Left"):
             result = SimpleNamespace(hand_landmarks=[[point] * 21], hand_world_landmarks=[[point] * 21],
-                                     handedness=[[SimpleNamespace(category_name=raw)]])
+                                     handedness=[[SimpleNamespace(category_name=label)]])
             detector = SimpleNamespace(detect_for_video=lambda image, timestamp, result=result: result)
-            with self.subTest(raw=raw, mirrored=mirrored):
-                frame = np.zeros((4, 4, 3), np.uint8)
-                self.assertEqual(detect_hands(detector, frame, 0, mirrored)[0].label, expected)
+            self.assertEqual(detect_hands(detector, np.zeros((4, 4, 3), np.uint8), 0)[0].label, label)
 
     def test_real_landmarks_give_true_hand_and_facing(self):
         data = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "handedness.json").read_text(encoding="utf-8"))
@@ -39,13 +36,9 @@ class DetectionTest(unittest.TestCase):
             with self.subTest(source=case["source"]):
                 self.assertEqual(case["mediapipe_label"], case["true_hand"])
                 landmarks = [SimpleNamespace(x=x, y=y, z=z) for x, y, z in case["landmarks"]]
-                facing = palm_facing(landmarks, case["true_hand"], False, case["width"], case["height"])
+                facing = palm_facing(landmarks, case["true_hand"], case["width"], case["height"])
                 self.assertEqual("palm" if facing > 0.25 else "back" if facing < -0.25 else "turning",
                                  case["true_facing"])
-                # 같은 손을 좌우 반전한 영상에서도 손 방향은 같아야 함
-                flipped = [SimpleNamespace(x=1 - p.x, y=p.y, z=p.z) for p in landmarks]
-                self.assertAlmostEqual(palm_facing(flipped, case["true_hand"], True, case["width"], case["height"]),
-                                       facing, places=6)
 
     def test_detection_frame_is_capped_and_keeps_aspect(self):
         small = np.zeros((480, 640, 3), np.uint8)
@@ -72,7 +65,7 @@ class DetectionTest(unittest.TestCase):
 
         hands = assign_hands([Detection("Right", *palm_up(0.3, True)), Detection("Left", *palm_up(0.7, False))])
         for hand in hands.values():
-            self.assertGreater(hand_signal(hand.label, hand.landmarks, hand.world, False, 640, 480).facing, 0.25)
+            self.assertGreater(hand_signal(hand.label, hand.landmarks, hand.world, 640, 480).facing, 0.25)
 
 
 class PoseTest(unittest.TestCase):
@@ -101,7 +94,6 @@ class GeometryTest(unittest.TestCase):
         self.assertGreater(palm_facing(flat_points(0.56, 0.44), "Right"), 0.25)
         self.assertLess(palm_facing(flat_points(0.44, 0.56), "Right"), -0.25)
         self.assertGreater(palm_facing(flat_points(0.44, 0.56), "Left"), 0.25)
-        self.assertLess(palm_facing(flat_points(0.56, 0.44), "Right", mirrored=True), -0.25)
 
     def test_palm_roll_signs(self):
         p = flat_points(0.56, 0.44)

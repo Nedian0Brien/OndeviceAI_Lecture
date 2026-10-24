@@ -28,14 +28,6 @@ def xyz(point):
     return (point.x, point.y, getattr(point, "z", 0.0))
 
 
-def point_segment_distance(point, a, b):
-    """점에서 선분 a-b까지의 최단 거리를 구하는 함수"""
-    ab = [y - x for x, y in zip(a, b)]
-    length = sum(v * v for v in ab)
-    t = 0.0 if length < 1e-12 else max(0.0, min(1.0, sum((p - x) * v for p, x, v in zip(point, a, ab)) / length))
-    return math.dist(point, [x + t * v for x, v in zip(a, ab)])
-
-
 def joint_angle(a, b, c):
     """점 b에서 a와 c로 가는 두 벡터 사이의 각도(도)를 구하는 함수"""
     first = [x - y for x, y in zip(a, b)]
@@ -91,10 +83,10 @@ def palm_roll(landmarks, width=1.0, height=1.0):
     return math.degrees(math.atan2(-dz, math.hypot(dx, dy)))
 
 
-def palm_facing(landmarks, label, mirrored=False, width=1.0, height=1.0):
+def palm_facing(landmarks, label, width=1.0, height=1.0):
     """손바닥이 카메라를 향한 정도를 -1에서 1 사이 값으로 구하는 함수"""
     # 손목에서 검지 뿌리와 소지 뿌리로 가는 두 벡터의 외적임. 양수면 손바닥, 음수면 손등이 카메라를 향함
-    # 거울상이 되면 부호가 바뀌므로 왼손과 좌우 반전 영상에서는 부호를 뒤집음
+    # 왼손은 오른손의 거울상이라 부호가 반대이므로 뒤집음
     wrist = landmarks[WRIST]
     a = ((landmarks[INDEX_MCP].x - wrist.x) * width, (landmarks[INDEX_MCP].y - wrist.y) * height)
     b = ((landmarks[PINKY_MCP].x - wrist.x) * width, (landmarks[PINKY_MCP].y - wrist.y) * height)
@@ -103,8 +95,6 @@ def palm_facing(landmarks, label, mirrored=False, width=1.0, height=1.0):
         return 0.0
     value = -(a[0] * b[1] - a[1] * b[0]) / norm
     if label == "Left":
-        value = -value
-    if mirrored:
         value = -value
     return value
 
@@ -128,7 +118,15 @@ def pinch_ratios(world):
     # 손 크기로 나눠 사람과 카메라 거리에 따른 차이를 없앰
     scale = max(math.dist(xyz(world[WRIST]), xyz(world[MIDDLE_MCP])), 1e-6)
     thumb = xyz(world[THUMB_TIP])
-    return tuple(point_segment_distance(thumb, xyz(world[a]), xyz(world[b])) / scale for a, b in DISTAL_SEGMENTS)
+    ratios = []
+    for a, b in DISTAL_SEGMENTS:
+        # 엄지 끝을 끝마디 선분 위로 수직 투영한 점까지 잼. 투영 비율 t는 선분 안(0~1)으로 자름
+        start, end = xyz(world[a]), xyz(world[b])
+        ab = [y - x for x, y in zip(start, end)]
+        length = sum(v * v for v in ab)
+        t = 0.0 if length < 1e-12 else max(0.0, min(1.0, sum((p - x) * v for p, x, v in zip(thumb, start, ab)) / length))
+        ratios.append(math.dist(thumb, [x + t * v for x, v in zip(start, ab)]) / scale)
+    return tuple(ratios)
 
 
 def image_tips(landmarks, width=1.0, height=1.0):
@@ -139,7 +137,7 @@ def image_tips(landmarks, width=1.0, height=1.0):
     return tuple(points), size
 
 
-def hand_signal(label, landmarks, world, mirrored, width, height):
+def hand_signal(label, landmarks, world, width, height):
     """한 손의 관절 좌표로 HandSignal을 만드는 함수"""
     # 거리와 굽힘은 카메라 거리와 무관한 3D 좌표로, 자세·방향·기울기·손끝 위치는 영상 좌표로 계산함
     tips, size = image_tips(landmarks, width, height)
@@ -147,7 +145,7 @@ def hand_signal(label, landmarks, world, mirrored, width, height):
         ratios=pinch_ratios(world),
         curled=tuple(joint_angle(*(xyz(world[base + i]) for i in range(3))) <= CURL_ANGLE for base in FINGER_MCPS),
         pose=pose_from_image(landmarks, width, height),
-        facing=palm_facing(landmarks, label, mirrored, width, height),
+        facing=palm_facing(landmarks, label, width, height),
         roll=palm_roll(landmarks, width, height),
         flex=finger_flex(world),
         tips=tips,
@@ -252,14 +250,6 @@ class CheonjiinIME:
             self.tokens[-1].value = value
         else:
             self.tokens.append(Token("C", value))
-
-    def put_stroke(self, atom):
-        """천지인 획을 넣는 메서드"""
-        # 앞 모음에 이어 붙여 모음이 되면 붙이고(ㅣ에 ㆍ를 붙이면 ㅏ), 아니면 새 모음으로 넣음
-        if self.tokens and self.tokens[-1].kind == "V" and self.tokens[-1].value + atom in VOWELS:
-            self.tokens[-1].value += atom
-        else:
-            self.tokens.append(Token("V", atom))
 
     def put_symbol(self, value, replace=False):
         if replace and self.tokens and self.tokens[-1].kind == "B":
@@ -472,11 +462,6 @@ class FingerPinch:
         # 주먹을 쥐면 엄지가 손가락 위에 놓여 거리가 가까워지므로 핀치를 보지 않음
         return signal.pose == "fist" or all(signal.curled)
 
-    def armed(self):
-        """기준값을 잴 프레임이 쌓여 핀치를 받을 수 있는 상태인지 판별하는 메서드"""
-        # 처음 보이거나 사라졌다 돌아온 손은 한 프레임 뒤부터 받음. 주먹은 편 손으로 침
-        return bool(self.history) or self.active is not None or self.closed
-
     def release_level(self):
         return min(PINCH_EXIT, self.low[self.active] + RELEASE_RISE)
 
@@ -593,7 +578,11 @@ class FingerPinch:
             return None
         spoiled, short = self.spoiled, now - self.since < PINCH_MIN_CONTACT
         tap = self._emit(now)
-        self._end_contact()
+        # 접촉을 끝냄. 다음 핀치가 뗀 뒤의 거리를 기준으로 삼도록 기준값 기록도 비움
+        self.active = self.since = None
+        self.history, self.flexes = [], []
+        self.flex_base = self.flex_top = None
+        self.spoiled, self.low, self.opened = False, [1.0] * 4, 0
         if spoiled or short:
             self.undo_tap()
             return None
@@ -614,13 +603,6 @@ class FingerPinch:
         self.last_tap = (finger, now)
         return finger, now - self.since
 
-    def _end_contact(self):
-        """접촉을 끝내는 메서드"""
-        # 다음 핀치가 뗀 뒤의 거리를 기준으로 삼도록 기준값 기록도 비움
-        self.active = self.since = None
-        self.history, self.flexes = [], []
-        self.flex_base = self.flex_top = None
-        self.spoiled, self.low, self.opened = False, [1.0] * 4, 0
 
 
 # --- 양손 입력기 ---
@@ -693,7 +675,12 @@ class PinchTyper:
         if key == "VOWEL":
             atom = DRAG_STROKES[drag]
             self.pending = None
-            self.ime.put_stroke(atom)
+            tokens = self.ime.tokens
+            # 앞 모음에 획을 이어 붙여 모음이 되면 붙이고(ㅣ에 ㆍ를 붙이면 ㅏ), 아니면 새 모음으로 넣음
+            if tokens and tokens[-1].kind == "V" and tokens[-1].value + atom in VOWELS:
+                tokens[-1].value += atom
+            else:
+                tokens.append(Token("V", atom))
             return [("input", VOWELS[atom])]
         if key == "COMMIT":
             self.pending = None
@@ -767,13 +754,6 @@ class PinchTyper:
         return {"finger": finger, "points": points, "size": size, "drag": drag, "pointer": pointer}
 
     @staticmethod
-    def steady(held, face):
-        sign = 1 if face == "palm" else -1
-        facings = [signal.facing for signal in held]
-        return bool(facings) and all(sign * statistics.median(part) >= FACING_THRESHOLD
-                                     for part in (facings[:STEADY_FRAMES], facings[-STEADY_FRAMES:]))
-
-    @staticmethod
     def frame_face(signal, state):
         """이번 프레임 값만으로 정한 손 방향을 돌려주는 메서드"""
         # 손을 뒤집자마자 핀치하면 Orientation은 아직 이전 방향이므로 이 값도 함께 봄
@@ -783,15 +763,6 @@ class PinchTyper:
             if signal.facing <= -FACING_THRESHOLD:
                 return "back"
         return state
-
-    @staticmethod
-    def hidden(held, face):
-        return face == "palm" and bool(held) and statistics.median(s.roll for s in held) <= OCCLUDED_ROLL
-
-    def occluded(self, hand):
-        """손이 엄지가 가려질 만큼 소지 쪽으로 기울었는지 판별하는 메서드"""
-        state = self.hands[hand]
-        return state.signal is not None and state.orientation.state == "palm" and state.signal.roll <= OCCLUDED_ROLL
 
     def reset(self):
         """양손의 판정 상태를 모두 지우는 메서드"""
@@ -823,8 +794,17 @@ class PinchTyper:
                 tap = None
             if signal is not None and (tap is not None or hand.pinch.active is not None):
                 hand.held.append(signal)
-            if tap is not None and state in FACES and self.steady(hand.held, state) \
-                    and not self.hidden(hand.held, state) and KEYS[(label, state)][tap[0]] is not None:
+            steady = hidden = False
+            if tap is not None and state in FACES:
+                # 접촉의 처음과 마지막 STEADY_FRAMES 프레임에서 손 방향 값의 중앙값이 모두 뗄 때의 방향이어야 함
+                sign = 1 if state == "palm" else -1
+                facings = [held.facing for held in hand.held]
+                steady = bool(facings) and all(sign * statistics.median(part) >= FACING_THRESHOLD
+                                               for part in (facings[:STEADY_FRAMES], facings[-STEADY_FRAMES:]))
+                # 손바닥이 소지 쪽으로 OCCLUDED_ROLL보다 기운 접촉은 엄지가 가려졌으므로 버림
+                hidden = state == "palm" and bool(hand.held) and \
+                    statistics.median(held.roll for held in hand.held) <= OCCLUDED_ROLL
+            if steady and not hidden and KEYS[(label, state)][tap[0]] is not None:
                 self.pinches.append((label, tap[0], state))
                 drag = None
                 if KEYS[(label, state)][tap[0]] == "VOWEL":

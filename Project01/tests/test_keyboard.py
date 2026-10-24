@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import unittest
 
-from keyboard import (FIST_HOLD, FIST_REPEAT, MEDIALS, CheonjiinIME, FingerPinch, FistHold, Orientation, PinchTyper,
+from keyboard import (FIST_HOLD, FIST_REPEAT, MEDIALS, FingerPinch, FistHold, Orientation, PinchTyper,
                       cycle_queue, replay)
 from tests.helpers import BACK, DT, OPEN, Runner, pinched, sig
 
@@ -16,16 +16,17 @@ class IMETest(unittest.TestCase):
     @staticmethod
     def typed(*items):
         """("C", 자음) · ("V", 획들) · ("B", 기호) 순서로 넣은 입력기를 만드는 함수"""
-        ime = CheonjiinIME()
+        # 획은 모음 버튼(왼손 손등 검지)을 끌기 방향과 함께 핀치해 넣음
+        typer = PinchTyper()
         for kind, value in items:
             if kind == "C":
-                ime.put_consonant(value)
+                typer.ime.put_consonant(value)
             elif kind == "V":
                 for atom in value:
-                    ime.put_stroke(atom)
+                    typer.press_finger("Left", 0, "back", {".": None, "-": "h", "i": "v"}[atom])
             else:
-                ime.put_symbol(value)
-        return ime
+                typer.ime.put_symbol(value)
+        return typer.ime
 
     def test_all_21_vowels(self):
         strokes = ("i", "-", "i.", "i..", ".i", "..i", ".-", "..-", "-.", "-..", "i.i", "i..i", ".ii", "..ii",
@@ -262,10 +263,9 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(run.typer.ime.text, "ㄱ")
 
     def test_thumb_hidden_by_roll_is_ignored(self):
-        # 소지 쪽으로 OCCLUDED_ROLL보다 기울면 엄지가 가려지므로 손바닥 핀치를 버리고 안내함
+        # 소지 쪽으로 OCCLUDED_ROLL보다 기울면 엄지가 가려지므로 손바닥 핀치를 버림
         run = Runner().ready()
         run.frames(3, sig(), sig(roll=-35.0))
-        self.assertTrue(run.typer.occluded("Right"))
         run.frames(5, sig(), sig(pinched(0), roll=-35.0)).frames(3, sig(), sig(roll=-35.0))
         self.assertEqual(run.typer.ime.text, "")
         run.frames(3, sig(), sig(roll=-10.0)).frames(5, sig(), sig(pinched(0), roll=-10.0))

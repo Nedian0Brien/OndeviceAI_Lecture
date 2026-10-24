@@ -4,14 +4,15 @@ import json
 from pathlib import Path
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 
-from keyboard import PinchTyper
+from keyboard import PinchTyper, hand_signal
 from record import REST, SHORT_WORDS, read_config, signal_from_log, word_steps
 from tests.helpers import AWAY, fold_fist, to_image, world_hand
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "visionos"))
-from pinch_vision import LOG_KEEP, Session, signal_of  # noqa: E402
+from pinch_vision import IMAGE_SCALE, LOG_KEEP, Session  # noqa: E402
 
 
 class VisionSessionTest(unittest.TestCase):
@@ -49,12 +50,16 @@ class VisionSessionTest(unittest.TestCase):
         def meters(world):
             return {"world": world.tolist(), "image": world.tolist()}
 
+        def pose(world):
+            points = [SimpleNamespace(x=x, y=y, z=z) for x, y, z in world.tolist()]
+            return hand_signal("Left", points, points, IMAGE_SCALE, IMAGE_SCALE).pose
+
         open_hand = world_hand()
         fist = fold_fist(world_hand())
-        self.assertEqual(signal_of("Left", meters(open_hand)).pose, "open")
-        self.assertEqual(signal_of("Left", meters(fist)).pose, "fist")
+        self.assertEqual(pose(open_hand), "open")
+        self.assertEqual(pose(fist), "fist")
         session = Session()
-        session.typer.ime.put_stroke("i")  # ㅣ
+        session.typer.press_finger("Left", 0, "back", "v")  # ㅣ
         outputs, _ = self.run_frames(session, [meters(open_hand)] * 25 + [meters(fist)] * 10 + [meters(open_hand)] * 3)
         self.assertIn(["delete", None], [e for out in outputs for e in out["events"]])
         self.assertEqual(outputs[-1]["text"], "")

@@ -9,8 +9,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-from keyboard import (DISTAL_SEGMENTS, DRAG_MIN, DRAG_STROKES, FINGER_MCPS, FINGER_TIPS, HAND_CONNECTIONS, KEYS,
-                      MIDDLE_MCP, THUMB_TIP, VOWELS, WRIST, cycle_queue, group_of, key_label)
+from keyboard import (DISTAL_SEGMENTS, DRAG_MIN, DRAG_STROKES, FINGER_MCPS, FINGER_TIPS, HAND_CONNECTIONS, MIDDLE_MCP,
+                      THUMB_TIP, VOWELS, WRIST, cycle_queue)
 
 
 # 색은 (R, G, B, 불투명도)임. 가는 선과 눈금으로 정보를 나타내고 강조색은 파랑 한 가지만 씀
@@ -22,11 +22,9 @@ ACCENT = (158, 197, 255, 255)
 ACCENT_FILL = (46, 74, 128, 150)
 BACKDROP = (8, 10, 16, 120)  # 밝은 영상 위에서도 선과 글자가 보이게 까는 어두운 면
 HALO = (8, 10, 16, 120)  # 가는 선 아래에 까는 어두운 테두리
-DIM = (200, 202, 210, 150)
 OK_GREEN = (126, 224, 176, 255)
 DELETE_RED = (255, 128, 116, 255)
 OUTLINE = (28, 29, 34, 170)  # 밝은 영상 위 글자의 외곽선
-WARN_YELLOW = (255, 214, 102, 255)
 
 FONT_SIZES = (16, 21, 29)
 FONT_CANDIDATES = (
@@ -54,30 +52,13 @@ ECHO_IN, ECHO_HOLD, ECHO_OUT = 0.08, 0.25, 0.6
 # 펼치기 전에 기다리는 시간은 주먹 판정이 프레임마다 흔들릴 때 버튼이 들썩이지 않게 하기 위함
 SPREAD_OPEN, SPREAD_CLOSE, SPREAD_HOLD = 0.35, 0.15, 0.15
 
-HELP_LINES = [
-    "PinchKeyboard: 손끝 꼬집기 한글 입력기",
-    "같은 손가락 반복 = 순환(대기 글자가 손끝으로 올라옴) · 다른 키 = 자동 확정",
-    "왼손 손바닥: ㅂㅍㅃ ㄹ ㅅㅎㅆ ㅈㅊㅉ  ·  오른손 손바닥: ㄱㅋㄲ ㄴ ㄷㅌㄸ ㅇㅁ  (ㄴ·ㄹ은 순환 없이 바로)",
-    "왼손 손등: 모음 · 공백 · 확정 · .,?!줄바꿈  ·  모음(검지): 꼬집기 ㆍ, 꼬집은 채 가로로 끌기 ㅡ, 세로로 끌기 ㅣ",
-    "오른손 손등 검지: 확정/공백(후보가 있으면 확정, 없으면 공백)",
-    "주먹(양손): 마지막 자모 지움(감 → 가 → ㄱ), 쥐고 있으면 0.5초마다 계속",
-    "C 복사 · X 전체 지우기 · P 일시정지 · K 자판 지도 · F 전체 화면 · H 닫기 · Q 종료",
-    "단어 입력(--words): N 건너뛰기",
-]
-
-
 # --- 글꼴과 글자 ---
 
-def load_fonts(requested=None):
-    """한글 글꼴을 작음·보통·큼 세 크기로 불러오는 함수"""
-    if requested:
-        path = Path(requested).expanduser()
-        if not path.is_file():
-            raise FileNotFoundError("한글 폰트 파일이 없습니다: " + str(path))
-    else:
-        path = next((Path(name) for name in FONT_CANDIDATES if Path(name).is_file()), None)
-        if path is None:
-            raise FileNotFoundError("한글 폰트를 찾지 못했습니다. --font /경로/폰트.ttf 를 지정하세요.")
+def load_fonts():
+    """설치된 한글 글꼴을 작음·보통·큼 세 크기로 불러오는 함수"""
+    path = next((Path(name) for name in FONT_CANDIDATES if Path(name).is_file()), None)
+    if path is None:
+        raise FileNotFoundError("한글 폰트를 찾지 못했습니다. FONT_CANDIDATES에 글꼴 경로를 더하세요.")
     return tuple(ImageFont.truetype(str(path), size) for size in FONT_SIZES)
 
 
@@ -115,15 +96,6 @@ def ellipsize_left(text, font, available):
         else:
             high = middle - 1
     return "…" + (text[-low:] if low else "")
-
-
-def rounded_rectangle(draw, bounds, radius, **style):
-    """좌표를 정수로 맞춰 모서리가 둥근 사각형을 그리는 함수"""
-    # Pillow 12.3은 좌표가 소수이고 폭이 반지름의 2배에 가까우면 ValueError를 냄(무작위 2만 회 중 8%)
-    # 좌표를 정수로 반올림하고 반지름을 짧은 변의 절반 이하로 제한하면 생기지 않음
-    x1, y1, x2, y2 = (round(v) for v in bounds)
-    draw.rounded_rectangle((x1, y1, x2, y2), radius=max(0, min(round(radius), (x2 - x1) // 2, (y2 - y1) // 2)),
-                           **style)
 
 
 # --- 캔버스 ---
@@ -237,11 +209,14 @@ class HudCanvas:
         self.draw.ellipse(box, fill=(0, 0, 0, 0))
         self.glow_draw.ellipse(box, fill=(0, 0, 0, 0))
 
-    def panel(self, bounds, active=False, radius=None):
-        """어두운 면과 가는 테두리로 된 패널을 그리는 메서드"""
-        r = 4 * self.scale if radius is None else radius
-        rounded_rectangle(self.draw, bounds, r, fill=ACCENT_FILL if active else BACKDROP,
-                          outline=ACCENT if active else LINE_DIM, width=self._line_width(None))
+    def panel(self, bounds, active=False):
+        """어두운 면과 가는 테두리로 된 둥근 사각형 패널을 그리는 메서드"""
+        # Pillow 12.3은 좌표가 소수이고 폭이 반지름의 2배에 가까우면 ValueError를 냄(무작위 2만 회 중 8%)
+        # 좌표를 정수로 반올림하고 반지름을 짧은 변의 절반 이하로 제한하면 생기지 않음
+        x1, y1, x2, y2 = (round(v) for v in bounds)
+        radius = max(0, min(round(4 * self.scale), (x2 - x1) // 2, (y2 - y1) // 2))
+        self.draw.rounded_rectangle((x1, y1, x2, y2), radius=radius, fill=ACCENT_FILL if active else BACKDROP,
+                                    outline=ACCENT if active else LINE_DIM, width=self._line_width(None))
 
     def finish(self):
         """번짐 층과 overlay를 영상에 합성해 BGR 프레임으로 돌려주는 메서드"""
@@ -512,14 +487,10 @@ def draw_vowel_drag(canvas, drag, points, diameter, fonts):
 
 def draw_hand(canvas, typer, label, points, ui, fonts, now):
     """손 하나의 골격선, 손바닥 원형 표시, 손끝 버튼, 모음 끌기를 그리는 함수"""
-    s, w, h = canvas.scale, canvas.w, canvas.h
+    s = canvas.scale
     state = typer.hands[label]
     for a, b in HAND_CONNECTIONS:
         canvas.draw.line((points[a], points[b]), fill=(237, 242, 250, 95), width=canvas.stroke)
-    if typer.occluded(label):
-        x, y = points[WRIST]
-        x, y = min(max(x, 40 * s), w - 40 * s), min(y + 12 * s, h - 20 * s)
-        write(canvas, (x, y), "엄지 쪽을 카메라로 돌려 주세요", canvas.small, WARN_YELLOW, "ma", True)
     tips = [points[tip] for tip in FINGER_TIPS]
     spacing = min(math.dist(a, b) for a, b in zip(tips, tips[1:]))
     diameter = min(TIP_MAX * s, max(TIP_MIN * s, spacing * TIP_SPACING))
@@ -554,7 +525,7 @@ def draw_hand(canvas, typer, label, points, ui, fonts, now):
 
 # --- 화면 위와 아래 ---
 
-def draw_input_line(canvas, typer, paused, now):
+def draw_input_line(canvas, typer, now):
     """화면 위에 입력 한 줄을 그리고 패널 아래 y를 돌려주는 함수"""
     # 확정 전 자음 후보 아래에는 파랑 밑줄을, 그 밖에는 깜빡이는 커서를 둠
     s, w, stroke = canvas.scale, canvas.w, canvas.stroke
@@ -577,29 +548,10 @@ def draw_input_line(canvas, typer, paused, now):
         last = hud_text_width(shown[-1:], font)
         canvas.glow_line(((text_right - last, margin + height - 9 * s), (text_right, margin + height - 9 * s)),
                          ACCENT, max(2, round(2 * s)))
-    elif text and int(now * 2) % 2 == 0 and not paused:
+    elif text and int(now * 2) % 2 == 0:
         canvas.draw.line((text_right + 4 * s, margin + 12 * s, text_right + 4 * s, margin + height - 12 * s),
                          fill=MUTED, width=stroke)
     return margin + height
-
-
-def draw_cycle_row(canvas, typer, top):
-    """입력 줄 아래에 순환 중인 그룹 전체를 그리는 함수"""
-    if typer.pending is None:
-        return
-    s = canvas.scale
-    group = [("줄" if c == "\n" else c) for c in group_of(typer.pending.key)]
-    current = (typer.pending.count - 1) % len(group)
-    cell = 22 * s
-    x = canvas.w / 2 - len(group) * cell / 2
-    for i, char in enumerate(group):
-        write(canvas, (x + (i + 0.5) * cell, top + cell / 2), char, canvas.normal, WHITE if i == current else DIM,
-              "mm", True)
-        bar = (x + i * cell + 4 * s, top + cell + 1 * s, x + (i + 1) * cell - 4 * s, top + cell + 1 * s)
-        if i == current:
-            canvas.glow_line((bar[:2], bar[2:]), ACCENT, max(2, round(2 * s)))
-        else:
-            canvas.draw.line(bar, fill=LINE_DIM, width=canvas.stroke)
 
 
 def draw_word_panel(canvas, word, top):
@@ -614,47 +566,7 @@ def draw_word_panel(canvas, word, top):
     write(canvas, (w / 2, top + 47 * s), word["detail"], canvas.small, MUTED, "mm", True)
 
 
-def draw_key_map(canvas, typer):
-    """화면 아래에 손마다 지금 방향의 키 네 개를 보여 주는 자판 지도를 그리는 함수"""
-    s, w, h = canvas.scale, canvas.w, canvas.h
-    cell_w, cell_h, gap = 50 * s, 28 * s, 5 * s
-    top = h - 16 * s - cell_h
-    for hand, center in (("Left", w * 0.27), ("Right", w * 0.73)):
-        state, face = typer.hands[hand], typer.face(hand) or "palm"
-        start = center - (4 * cell_w + 3 * gap) / 2
-        for i, key in enumerate(KEYS[(hand, face)]):
-            if key is None:
-                continue
-            bounds = (start + i * (cell_w + gap), top, start + i * (cell_w + gap) + cell_w, top + cell_h)
-            canvas.panel(bounds, active=state.pinch.active == i)
-            name = key_label(key)
-            write(canvas, ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2), name,
-                  canvas.normal if len(name) <= 3 and key != "PUNCT" else canvas.small, WHITE, "mm")
-
-
-def draw_notice(canvas, message, show_map):
-    """화면 아래에 상태 안내 한 줄을 그리는 함수"""
-    s, w, h = canvas.scale, canvas.w, canvas.h
-    mw = min(w - 32 * s, hud_text_width(message, canvas.small) + 28 * s)
-    top = h - (92 if show_map else 58) * s
-    canvas.panel(((w - mw) / 2, top, (w + mw) / 2, top + 26 * s))
-    write(canvas, (w / 2, top + 13 * s), message, canvas.small, MUTED, "mm")
-
-
-def draw_help(canvas, fps):
-    """화면을 어둡게 덮고 도움말과 fps를 그리는 함수"""
-    s, w, h = canvas.scale, canvas.w, canvas.h
-    canvas.draw.rectangle((0, 0, w, h), fill=(16, 17, 21, 165))
-    bw = min(w - 32 * s, 470 * s)
-    box = ((w - bw) / 2, 44 * s, (w + bw) / 2, h - 44 * s)
-    rounded_rectangle(canvas.draw, box, 22 * s, fill=(38, 40, 47, 238), outline=(255, 255, 255, 65),
-                      width=canvas.stroke)
-    for i, line in enumerate(HELP_LINES + [f"{fps:.0f} FPS"]):
-        write(canvas, (box[0] + 20 * s, box[1] + (20 + i * 27) * s), line, canvas.normal if i == 0 else canvas.small,
-              WHITE if i == 0 else MUTED)
-
-
-def draw_hud(frame, typer, hands, ui, fonts, fps):
+def draw_hud(frame, typer, hands, ui, fonts):
     """한 프레임의 화면을 그려 BGR 프레임으로 돌려주는 함수"""
     # hands는 손마다 픽셀 좌표 21개이고, ui는 애니메이션과 안내 상태를 프레임 사이에 이어 담음
     canvas = HudCanvas(frame, fonts)
@@ -665,23 +577,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
     for label, points in hands.items():
         draw_hand(canvas, typer, label, points, ui, fonts, now)
 
-    bottom = draw_input_line(canvas, typer, ui["paused"], now)
-    draw_cycle_row(canvas, typer, bottom + 8 * canvas.scale)
-    if ui["show_map"]:
-        draw_key_map(canvas, typer)
+    bottom = draw_input_line(canvas, typer, now)
     if ui.get("word") is not None:
         draw_word_panel(canvas, ui["word"], bottom + 38 * canvas.scale)
-
-    # 상태 안내는 일시정지, 손 없음, 최근 2.5초 안의 알림 순서로 하나만 보여 줌
-    message = ""
-    if ui["paused"]:
-        message = "일시정지 · P로 재개"
-    elif not hands:
-        message = "손바닥을 카메라 쪽으로 보여주세요"
-    elif ui["notice_since"] is not None and now - ui["notice_since"] < 2.5:
-        message = ui["status"]
-    if message and not ui["show_help"]:
-        draw_notice(canvas, message, ui["show_map"])
-    if ui["show_help"]:
-        draw_help(canvas, fps)
     return canvas.finish()

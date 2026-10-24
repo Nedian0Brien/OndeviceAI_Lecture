@@ -23,7 +23,7 @@ Project01/
 ├── main.py         실행 파일: 실행 옵션, 카메라와 창, 프레임 반복문, 단축키, 시연(--demo), 채점(--evaluate)
 ├── hand.py         MediaPipe 손 검출, 왼손·오른손 배정, 손 관절에서 손 신호(HandSignal) 계산
 ├── keyboard.py     천지인 한글 조합, 자판 배치, 손 방향·주먹·핀치 판정, 양손 입력기(PinchTyper)
-├── hud.py          카메라 영상 위 화면(손끝 버튼, 손바닥 원형 표시, 입력 줄, 도움말)
+├── hud.py          카메라 영상 위 화면(손끝 버튼, 손바닥 원형 표시, 입력 줄)
 ├── record.py       프레임 기록(--log), 단어 입력 시험(--words), 기록 재생 채점
 ├── visionos/       확장: Vision Pro 시험 앱(PinchKeyboard). 아래 "창의성 및 확장성" 참고
 ├── tests/          단위 테스트(카메라 없이 실행)
@@ -63,8 +63,8 @@ flowchart LR
   python -m pip install --no-deps mediapipe
   python -m pip install absl-py flatbuffers sounddevice certifi
   ```
-- 손 검출 모델 `src/models/MediaPipe/hand_landmarker.task`(수업 노트북에서 받은 파일)는 저장소에 들어 있습니다. 다른 모델은 `--model`로 지정합니다.
-- 한글 글꼴은 Noto CJK(Ubuntu·Jetson: `fonts-noto-cjk`), 나눔고딕, 맑은 고딕, Apple SD Gothic Neo 중 설치된 것을 찾아 씁니다. 없으면 `--font /경로/글꼴.ttf`로 지정합니다.
+- 손 검출 모델 `src/models/MediaPipe/hand_landmarker.task`(수업 노트북에서 받은 파일)는 저장소에 들어 있습니다.
+- 한글 글꼴은 Noto CJK(Ubuntu·Jetson: `fonts-noto-cjk`), 나눔고딕, 맑은 고딕, Apple SD Gothic Neo 중 설치된 것을 찾아 씁니다. 없으면 `hud.py`의 `FONT_CANDIDATES`에 글꼴 경로를 더합니다.
 
 ### 실행 명령
 
@@ -73,18 +73,14 @@ flowchart LR
 ```bash
 python Project01/main.py --demo                      # 카메라 없이 고정 데이터 재생 → "안녕하세요" 출력
 python Project01/main.py --camera 0                  # 카메라 번호로 실행(macOS + iPhone 연결 시 0번이 iPhone)
-python Project01/main.py --pipeline usb              # Jetson USB 카메라(GStreamer 640×480 30fps)
+python Project01/main.py --jetson                     # Jetson USB 카메라(GStreamer 640×480 30fps)
 python Project01/main.py --camera 0 --words          # 단어 입력 시험(기록: Project01/data/words-날짜-시각.jsonl)
 python Project01/main.py --camera 0 --log Project01/data/free.jsonl   # 프레임별 손 신호 기록
 ```
 
 | 옵션 | 내용 |
 | --- | --- |
-| `--camera N` / `--pipeline 문자열` | 카메라 번호 / GStreamer 파이프라인(`usb`는 Jetson `/dev/video0` 설정) |
-| `--resolution` | 카메라 해상도. 기본 `auto`는 macOS 1280×720, 그 밖(Jetson) 640×480 |
-| `--detect-width` | 손 검출에 넣는 영상의 최대 가로 크기(기본 640). 화면은 원래 해상도로 그린다 |
-| `--mirror` | 좌우 반전(카메라가 사람을 마주 보는 셀카 배치일 때) |
-| `--model`, `--font` | 손 검출 모델, 한글 글꼴 경로 |
+| `--camera N` / `--jetson` | 카메라 번호(macOS는 1280×720, 그 밖은 640×480으로 요청) / Jetson USB 카메라(GStreamer 640×480 30fps) |
 | `--log 파일` | 프레임마다 손 신호·관절·입력 이벤트를 jsonl로 기록 |
 | `--words` | 단어 입력 시험. 단어를 하나씩 보여 주고, 입력 칸이 그 단어가 되면 다음 단어로 넘어간다 |
 | `--evaluate 기록 [-v]` | 정답이 있는 기록을 지금 판정으로 다시 재생해 맞음·오입력·빠짐을 센다. `-v`면 단어(차례)마다 결과 |
@@ -122,21 +118,16 @@ python Project01/main.py --camera 0 --log Project01/data/free.jsonl   # 프레�
 
 - 버튼 둘레의 눈금은 엄지가 다가온 만큼 흰색으로, 누르는 동안에는 뗀 만큼 파랑으로 찹니다.
 - 손바닥 가운데 원에는 손가락마다 얼마나 다가왔는지가 막대로 나오고, 방금 입력한 글자가 잠깐 떴다 사라집니다.
-- 화면 위쪽에는 입력한 글과 지금 돌고 있는 자음 그룹이 뜹니다.
+- 화면 위쪽에는 입력한 글이 뜹니다.
 
 | 키 | 기능 |
 | --- | --- |
-| `H` | 도움말 |
-| `K` | 화면 아래 자판 지도 |
-| `P` | 일시정지 |
-| `C` / `X` | 입력한 글 복사 / 전체 지우기 |
-| `F` | 전체 화면 |
 | `N` | (`--words`) 지금 단어 건너뛰기 |
-| `Q` / `Esc` | 종료(입력한 글은 터미널에 출력) |
+| `Q` | 종료(입력한 글은 터미널에 출력) |
 
 ### 처리 과정 (한 프레임)
 
-1. 카메라 프레임을 읽고, `--mirror`면 좌우를 뒤집습니다(`main.py`).
+1. 카메라 프레임을 읽습니다(`main.py`).
 2. 가로 640px 이하로 줄여 RGB로 바꾼 뒤 MediaPipe VIDEO 모드(`detect_for_video`)에 넣습니다. 손마다 이미지 좌표와 world 좌표(m)로 관절 21개가 나옵니다(`hand.py`).
 3. 손마다 신호를 계산합니다(`hand.py`).
    - 핀치 거리: 엄지 끝에서 손가락 끝마디 선분(DIP→TIP)까지의 거리를 손 크기(손목~중지 뿌리)로 나눈 값. 점이 아니라 선분까지 재기 때문에 끝마디 어디에 닿아도 기준이 같습니다.
@@ -149,7 +140,7 @@ python Project01/main.py --camera 0 --log Project01/data/free.jsonl   # 프레�
 
 ```bash
 cd Project01
-python -m unittest discover -s tests -t .                # 단위 테스트 73개, 카메라 없이 실행
+python -m unittest discover -s tests -t .                # 단위 테스트 72개, 카메라 없이 실행
 python main.py --evaluate data/words-*.jsonl -v          # --words로 남긴 기록을 지금 판정으로 다시 재생
 ```
 
@@ -159,7 +150,7 @@ python main.py --evaluate data/words-*.jsonl -v          # --words로 남긴 기
 | `test_hand.py` | 좌우 라벨, 손 배정, 검출 입력 크기, 자세·방향·기울기, 핀치 거리 |
 | `test_hud.py` | 화면 애니메이션(펼침·순환·입력 표시), 둥근 사각형, 빈 프레임에 화면 그리기 |
 | `test_record.py` | 단어 60개 모두 기대 키 순서로 칠 수 있는지, 단어 시험 흐름, 기록 한 줄 재생, 키 순서 맞추기 |
-| `test_main.py` | 해상도 옵션, 단어 안내 문구 |
+| `test_main.py` | 단어 안내 문구 |
 | `test_vision_session.py` | Vision Pro 판정 세션(합성 손으로 입력·주먹·모음 끌기·단어 모드·기록) |
 
 `test_hud.py`의 화면 테스트는 한글 글꼴이 있어야 돌아갑니다.
@@ -330,7 +321,7 @@ flowchart TB
 | 중지를 핀치하면 약지 끝마디도 함께 가까워집니다. | 가장 가까운 후보가 다른 손가락보다 0.03 이상 가까울 때만 접촉을 시작합니다. 접촉 중에 더 가까워진 손가락이 있으면 그쪽으로 옮깁니다(약지로 가는 길에 검지를 지나가도 약지). |
 | 손끝이 스치기만 해도 거리가 내려갑니다. | 손끝을 **뗄 때** 입력합니다. 가장 가까웠던 거리보다 0.12 이상 벌어진 프레임이 2번 이어져야 하고, 0.10초보다 짧은 접촉은 버립니다(실제 핀치는 모두 0.13초 이상). |
 | 손을 뒤집는 도중에 엄지가 손끝 옆을 지나갑니다. | 접촉의 처음 3프레임과 마지막 3프레임의 손 방향이 모두 같아야 입력합니다. 손을 뒤집으며 뗀 핀치 5개 중 4개를 막았습니다. |
-| 소지 쪽이 카메라에 가깝게 기울면 엄지가 가려집니다(기운 차례 8개 중 7개 오입력). | 손바닥 핀치 동안 기울기가 −25° 이하이면 입력하지 않고, 화면에 "엄지 쪽을 카메라로 돌려 주세요"를 띄웁니다. |
+| 소지 쪽이 카메라에 가깝게 기울면 엄지가 가려집니다(기운 차례 8개 중 7개 오입력). | 손바닥 핀치 동안 기울기가 −25° 이하이면 입력하지 않습니다. |
 | 엄지가 검지 옆에서 쉬다가 중지·약지를 핀치하면 검지 값도 같이 내려옵니다. | 검지로 판정된 접촉에서 다른 손가락 거리가 검지 +0.05 안이고 그 손가락이 10° 이상 더 굽었으면 그 손가락으로 바꿉니다(정답이 있는 접촉 90개에서 맞음 78 → 83개). |
 | 오른손 엄지가 다른 손가락으로 오가며 검지를 지나갑니다(영상 확인). | 오른손 손바닥 검지는 다른 손가락을 뗀 뒤 0.25초 안에 시작했거나 검지가 5° 넘게 굽지 않았으면 버립니다(자유 입력에서 지움이 뒤따른 검지 오입력 9 → 5개). |
 | 주먹을 쥐는 도중 엄지가 손끝에 닿습니다. | 손바닥에서 다른 세 손가락이 굽은 접촉은 버리고, 주먹 자세 동안은 핀치를 보지 않습니다. |
@@ -349,7 +340,7 @@ flowchart TB
 
 - 카메라 한 대와 MediaPipe 손 관절만으로 한글 자모 40개와 문장부호를 모두 입력할 수 있습니다. 동작은 핀치, 손 뒤집기, 끌기, 주먹 쥐기 네 가지이고 양손 열 손가락을 다 씁니다.
 - 카메라로 남긴 정답 기록(손가락 차례 기록 7개, 117차례)을 지금 판정으로 다시 돌리면, 첫 입력이 맞은 차례가 100차례(85.5%)입니다. 다른 손가락으로 잘못 들어간 입력은 4번뿐이고, 틀린 경우는 대부분 입력이 아예 안 된 경우(15차례)였습니다.
-- 판정 코드를 카메라와 분리해 둔 덕에 Vision Pro 손 추적에서도 같은 코드가 그대로 돕니다. 판정과 한글 조합은 카메라 없이 도는 단위 테스트 73개로 검증합니다.
+- 판정 코드를 카메라와 분리해 둔 덕에 Vision Pro 손 추적에서도 같은 코드가 그대로 돕니다. 판정과 한글 조합은 카메라 없이 도는 단위 테스트 72개로 검증합니다.
 
 **기대효과**
 
@@ -359,7 +350,7 @@ flowchart TB
 
 **앞으로 확장할 수 있는 것**
 
-- 다른 프로그램에 글자를 보내는 OS 입력기 연결. 지금은 화면에 보여 주고 복사(`C`)하는 데까지만 됩니다.
+- 다른 프로그램에 글자를 보내는 OS 입력기 연결. 지금은 화면에 보여 주고 종료할 때 터미널에 출력하는 데까지만 됩니다.
 - 손 모양 데이터가 더 쌓이면 규칙 대신 학습 모델(손 신호 → 손가락 분류)로 판정을 바꿔 비교해 볼 수 있습니다.
 
 ### Contribution: AI 활용과 본인 기여도
@@ -392,7 +383,7 @@ flowchart TB
 | 수업 내용 | 적용 |
 | --- | --- |
 | 영상 입출력, GStreamer | 카메라 번호 / Jetson GStreamer 파이프라인으로 열기(`main.py`) |
-| 이미지 조정 | 좌우 반전(`--mirror`), 검출 입력 크기 조정(`cv2.resize`, `INTER_AREA`) |
+| 이미지 조정 | 검출 입력 크기 조정(`cv2.resize`, `INTER_AREA`) |
 | 색공간 변환 | MediaPipe 입력용 BGR → RGB |
 | 신체 인식·객체 추적 | MediaPipe Hand Landmarker VIDEO 모드(`detect_for_video`)로 두 손 관절 추적 |
 | 결과 표현 | 관절 사이 거리·외적·각도로 동작 판정, 영상 위 HUD와 한글 출력 |

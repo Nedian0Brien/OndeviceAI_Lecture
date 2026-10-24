@@ -1,7 +1,7 @@
 """손 관절(landmark) → 판정에 쓰는 손 신호(HandSignal).
 
-카메라(MediaPipe)와 판정을 나누는 경계다. 판정(pinch.py, typer.py)은 이 신호만 보고, 관절을 어디서 얻었는지
-(카메라 영상, Vision Pro)는 모른다. 관절은 x, y, z 속성만 있으면 된다.
+카메라(MediaPipe)와 판정을 나누는 경계입니다. 판정(pinch.py, typer.py)은 이 신호만 보고, 관절을 어디서
+얻었는지(카메라 영상, Vision Pro)는 모릅니다. 관절은 x, y, z 속성만 있으면 됩니다.
 
 신호에 담는 값
   ratios  손가락별 꼬집기 거리: 엄지 끝 ~ 손가락 끝마디 선분 거리 / 손 크기(손목 ~ 중지 뿌리)
@@ -32,12 +32,13 @@ class HandSignal:
 
 
 def pinch_ratios(world):
-    """엄지 끝(4) ~ 각 손가락 끝마디 선분(DIP → TIP) 거리 / 손목(0) ~ 중지 뿌리(9) 길이. 검지·중지·약지·소지.
+    """손가락별 꼬집기 거리를 검지·중지·약지·소지 순으로 돌려줍니다.
+    거리 = 엄지 끝(4) ~ 손가락 끝마디 선분(DIP → TIP) 거리 / 손목(0) ~ 중지 뿌리(9) 길이.
 
-    손끝 점끼리 재면 지문 면(끝마디 가운데)이 닿아도 거리가 남는다. 선분까지 재면 끝마디 어디에 닿든 같은 기준이 된다.
-    손 크기로 나눠 사람·카메라 거리에 따른 차이를 없앤다.
+    손끝 점끼리 재면 지문 면(끝마디 가운데)이 닿아도 거리가 남습니다. 선분까지 재면 끝마디 어디에 닿든 같은 기준이
+    됩니다. 손 크기로 나눠 사람·카메라 거리에 따른 차이를 없앱니다.
     """
-    scale = max(math.dist(xyz(world[WRIST]), xyz(world[MIDDLE_MCP])), 1e-6)
+    scale = max(math.dist(xyz(world[WRIST]), xyz(world[MIDDLE_MCP])), 1e-6)  # 손 크기(0으로 나누지 않게 하한)
     thumb = xyz(world[THUMB_TIP])
     return tuple(point_segment_distance(thumb, xyz(world[a]), xyz(world[b])) / scale for a, b in DISTAL_SEGMENTS)
 
@@ -51,10 +52,11 @@ def image_tips(landmarks, width=1.0, height=1.0):
 
 
 def hand_signal(label, landmarks, world, mirrored=False, width=1.0, height=1.0, pose=None):
-    """한 손의 이미지 관절(정규화 좌표)과 world 관절(m)로 HandSignal을 만든다.
+    """한 손의 이미지 관절(정규화 좌표)과 world 관절(m)로 HandSignal을 만듭니다.
 
-    label: 실제 왼손/오른손(손바닥 방향 부호에 쓴다). pose를 주지 않으면 world 각도로 자세를 정한다.
+    label: 실제 왼손/오른손(손바닥 방향 부호에 씁니다). pose를 주지 않으면 world 각도로 자세를 정합니다.
     """
+    # 거리·각도·굽힘은 world 좌표(3D, 카메라 거리와 무관), 방향·기울기·손끝 위치는 이미지 좌표로 계산함
     angles = finger_angles(world)
     tips, size = image_tips(landmarks, width, height)
     return HandSignal(

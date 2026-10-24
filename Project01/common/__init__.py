@@ -1,7 +1,7 @@
 """카메라 앱과 Vision Pro 판정 세션이 함께 쓰는 공통 모듈.
 
-앱은 `python Project01/project01.py`로 실행하므로 Project01 디렉터리가 import 경로에 들어간다.
-그래서 별도 설치 없이 `from common.camera import open_capture`처럼 쓸 수 있다(Jetson에서도 같다).
+앱은 `python Project01/project01.py`로 실행하므로 Project01 디렉터리가 import 경로에 들어갑니다.
+그래서 별도 설치 없이 `from common.camera import open_capture`처럼 쓸 수 있습니다(Jetson에서도 같습니다).
 
 모듈 지도
   landmarks  MediaPipe 손 landmark 번호, 마디 선분, 좌표 변환과 거리 계산      (표준 라이브러리)
@@ -13,6 +13,6 @@
   cli        실행 옵션(--camera, --pipeline, --model, --font)
   synthetic  테스트용 합성 손(편 손, 주먹)                                      (numpy)
 
-외부 패키지는 그 패키지가 필요한 함수 안에서 import한다. 그래서 `--demo`와 판정 테스트, Vision Pro 내장 Python은
-OpenCV·MediaPipe 없이도 돈다. 이 파일도 아무것도 import하지 않는다.
+외부 패키지는 그 패키지가 필요한 함수 안에서 import합니다. 그래서 `--demo`와 판정 테스트, Vision Pro 내장
+Python은 OpenCV·MediaPipe 없이도 돕니다. 이 파일도 아무것도 import하지 않습니다.
 """

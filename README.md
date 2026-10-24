@@ -14,4 +14,3 @@ AI 부트캠프 온디바이스AI 수업 실습을 위한 리포지토리
 | [`Project01/`](Project01/README.md) | 프로젝트 1: PinchKeyboard, 손끝 핀치 한글 입력기(`Project01/main.py`) |
 | `practice/` | 수업 중 실습 코드 |
 | `src/` | 공용 이미지·모델(`src/models/MediaPipe/hand_landmarker.task` 등) |
-| `docs/` | 수업 내용 정리(학습 위키) |

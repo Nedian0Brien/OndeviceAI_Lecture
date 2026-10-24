@@ -75,7 +75,7 @@ class GestureTest(unittest.TestCase):
 
 
 def taps(frames):
-    """신호 목록을 30fps로 넣고 입력된 손가락 목록을 돌려준다."""
+    """신호 목록을 30fps로 넣고 입력된 손가락 목록을 돌려주는 함수"""
     pinch, now, fingers = FingerPinch(), 0.0, []
     for frame in frames:
         now += DT
@@ -96,11 +96,11 @@ class FingerPinchTest(unittest.TestCase):
         self.assertEqual(taps([OPEN] * 2 + [(0.6, 0.15, 0.17, 0.7)] * 4 + [OPEN] * 2), [])
 
     def test_neighbor_also_close(self):
-        # 중지를 꼬집으면 약지 끝마디도 가까워진다. 거리 차이(PINCH_MARGIN)만 넘으면 중지로 센다.
+        # 중지를 핀치하면 약지 끝마디도 가까워짐. 거리 차이가 PINCH_MARGIN을 넘으면 중지로 셈
         self.assertEqual(taps([OPEN] * 2 + [(0.45, 0.10, 0.16, 0.5)] * 4 + [OPEN] * 2), [1])
 
     def test_fist_ignores_pinch_distance(self):
-        # 주먹을 쥐면 엄지가 손가락 위에 놓여 거리가 낮아도 다가옴 0이고 판정하지 않는다. 손을 펴면 다시 꼬집을 수 있다.
+        # 주먹을 쥐면 거리가 낮아도 진행이 0이고 판정하지 않음. 손을 펴면 다시 핀치할 수 있음
         pinch, now = FingerPinch(), 0.0
         fist = sig((0.10, 0.12, 0.3, 0.4), pose="fist", curled=(True,) * 4)
         found = []
@@ -114,12 +114,12 @@ class FingerPinchTest(unittest.TestCase):
         self.assertEqual(found, [0])
 
     def test_fist_motion_spoils_contact(self):
-        # 주먹을 쥐는 도중: 꼬집힌 것처럼 보이는 검지 말고 나머지 셋이 모두 굽는다.
+        # 주먹을 쥐는 도중에는 핀치한 것처럼 보이는 검지 말고 나머지 세 손가락이 모두 굽음
         closing = sig(pinched(0), pose="closing", curled=(False, True, True, True))
         self.assertEqual(taps([sig()] * 2 + [closing] * 3 + [sig()] * 2), [])
 
     def test_rapid_taps_without_full_release_count_each(self):
-        # 2026-10-22 기록(오른손 약지): 꼬집기 사이에 0.33~0.37까지만 벌려도 각각 1회다.
+        # 2026-10-22 오른손 약지 기록에서 핀치 사이에 0.33~0.37까지만 벌려도 각각 한 번으로 셈
         values = [0.6] * 3 + [0.13] * 4 + [0.33] * 3 + [0.04] * 4 + [0.34] * 3 + [0.08] * 4 + [0.37] * 3 + [0.6] * 2
         self.assertEqual(taps([(0.6, 0.6, v, 0.7) for v in values]), [2, 2, 2])
 
@@ -128,12 +128,12 @@ class FingerPinchTest(unittest.TestCase):
         self.assertEqual(taps([(0.6, 0.6, v, 0.7) for v in values]), [2])
 
     def test_index_resting_close_is_not_a_pinch(self):
-        # 쉬는 자세에서 검지가 0.15~0.25로 가까워도 꼬집기가 아니다(기준값보다 다가오지 않음). 중지를 꼬집으면 중지다.
+        # 쉬는 자세에서 검지가 0.15~0.25로 가까워도 기준값보다 다가오지 않았으므로 핀치가 아님
         rest, middle = (0.2, 0.6, 0.65, 0.7), (0.21, 0.04, 0.4, 0.6)
         self.assertEqual(taps([rest] * 20 + [middle] * 4 + [rest] * 3), [1])
 
     def test_shallow_pass_hands_over_to_closer_finger(self):
-        # 중지로 가는 길에 검지가 0.25까지 다가왔다가 벌어진다. 검지가 아니라 중지다.
+        # 중지로 가는 길에 검지가 0.25까지 다가왔다가 벌어지면 중지로 셈
         frames = [(0.51, 0.76, 0.86, 0.99)] * 5 + [(0.27, 0.51, 0.68, 0.83), (0.25, 0.36, 0.51, 0.64),
                                                    (0.27, 0.23, 0.39, 0.54), (0.38, 0.12, 0.36, 0.52),
                                                    (0.39, 0.06, 0.35, 0.50), (0.4, 0.05, 0.36, 0.5)] \
@@ -149,8 +149,8 @@ class FingerPinchTest(unittest.TestCase):
             now += DT
             pinch.update(sig((0.2, 0.6, 0.65, 0.7)), now)
         progress = pinch.progress((0.2, 0.35, 0.65, 0.7))
-        self.assertEqual(progress[0], 0.0)  # 원래 가까운 검지는 다가오지 않았다
-        self.assertAlmostEqual(progress[1], 1.0)  # 중지는 기준값 0.6에서 PINCH_DROP 이상 다가왔다
+        self.assertEqual(progress[0], 0.0)  # 원래 가까운 검지는 다가오지 않았음
+        self.assertAlmostEqual(progress[1], 1.0)  # 중지는 기준값 0.6에서 PINCH_DROP 이상 다가왔음
         pinch = FingerPinch()
         for _ in range(3):
             pinch.update(sig(), 0.0)
@@ -175,13 +175,13 @@ class FixtureTest(unittest.TestCase):
 
 
 class FrameTest(unittest.TestCase):
-    """프레임 신호로 입력하는 규칙."""
+    """프레임 신호로 입력하는 규칙의 테스트"""
 
     def test_typing_from_frames(self):
         run = Runner().ready()
         run.tap("Right", 0).vowel("v").vowel()  # ㄱ ㅣ ㆍ
         self.assertEqual(run.typer.ime.text, "가")
-        self.assertEqual(run.typer.pinches, [])  # 이번 프레임에 인정된 꼬집기만 남는다
+        self.assertEqual(run.typer.pinches, [])  # 이번 프레임에 인정된 핀치만 남음
 
     def test_vowel_drag_direction(self):
         for drag, expected in ((None, "ㆍ"), ("h", "ㅡ"), ("v", "ㅣ")):
@@ -208,7 +208,7 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(run.kinds("input"), [("input", "ㆍ")])
 
     def test_back_pinch_with_other_fingers_curled(self):
-        # 손등 모음 꼬집기는 중지·약지·소지가 굽어도 입력한다. 손바닥에서는 주먹 쥐는 동작으로 보고 버린다.
+        # 손등 모음 핀치는 중지·약지·소지가 굽어도 입력함. 손바닥에서는 주먹을 쥐는 동작으로 보고 버림
         curled = (False, True, True, True)
         for facing, expected in ((BACK, [("input", "ㆍ")]), (0.8, [])):
             run = Runner().ready(left_facing=facing)
@@ -216,8 +216,8 @@ class FrameTest(unittest.TestCase):
             self.assertEqual(run.kinds("input"), expected, facing)
 
     def test_vowel_right_after_flip_to_back(self):
-        # 손바닥에서 손등으로 뒤집고 손 방향이 인정되기 전(FACING_DWELL)에 꼬집어도 손등 모음으로 들어간다.
-        # 2026-10-24 Vision Pro 기록: 뒤집고 0.14초 뒤 시작한 ㅣ 3개가 손바닥 꼬집기로 기록돼 모두 버려졌다.
+        # 손등으로 뒤집고 손 방향이 인정되기 전에 핀치해도 손등 모음으로 들어감
+        # 2026-10-24 기록에서 뒤집고 0.14초 뒤 시작한 ㅣ 3개가 모두 버려졌던 문제임
         run = Runner().ready()
         run.frames(3, sig(facing=BACK), sig())  # 뒤집는 중: 아직 손바닥으로 인정된 상태
         self.assertEqual(run.typer.face("Left"), "palm")
@@ -228,7 +228,7 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(run.kinds("input"), [("input", "ㅣ")])
 
     def test_back_pinch_keeps_through_one_frame_palm_jitter(self):
-        # 손등 모음 접촉 중 손 방향 값이 한 프레임 손바닥 쪽으로 튀어도, 다른 손가락이 굽었다고 버리지 않는다.
+        # 손등 모음 접촉 중 손 방향 값이 한 프레임 손바닥 쪽으로 튀어도 버리지 않음
         curled = (False, True, True, True)
         run = Runner().ready(left_facing=BACK)
         run.frames(3, sig(pinched(0), facing=BACK, curled=curled), sig())
@@ -237,7 +237,7 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(run.kinds("input"), [("input", "ㆍ")])
 
     def test_short_hand_loss_while_pinching_keeps_contact(self):
-        # 모음을 꼬집고 세로로 끄는 도중 손을 HAND_GAP 안에서 잠깐 놓쳐도 이어서 판정한다. 그보다 오래 놓치면 버린다.
+        # 모음을 핀치하고 끄는 도중 손을 HAND_GAP보다 짧게 놓치면 이어서 판정하고, 더 오래 놓치면 버림
         for missing, expected in ((3, [("input", "ㅣ")]), (15, [])):  # 0.1초 / 0.5초
             run = Runner().ready(left_facing=BACK)
             for k in range(6):
@@ -262,7 +262,7 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(run.typer.ime.text, "ㄱ")
 
     def test_thumb_hidden_by_roll_is_ignored(self):
-        # 소지 쪽으로 OCCLUDED_ROLL(-25°)보다 기울면 엄지가 가려진다: 손바닥 꼬집기를 버리고 안내한다.
+        # 소지 쪽으로 OCCLUDED_ROLL보다 기울면 엄지가 가려지므로 손바닥 핀치를 버리고 안내함
         run = Runner().ready()
         run.frames(3, sig(), sig(roll=-35.0))
         self.assertTrue(run.typer.occluded("Right"))
@@ -283,7 +283,7 @@ class FrameTest(unittest.TestCase):
             self.assertEqual(run.typer.ime.text, expected, flex)
 
     def test_right_index_sweep_is_ignored(self):
-        # 오른손 중지(ㄴ)를 뗀 직후 엄지가 돌아가며 검지를 지나간 접촉은 입력하지 않는다. 왼손은 그대로 입력한다.
+        # 오른손 중지를 뗀 직후 엄지가 돌아가며 검지를 지나간 접촉은 입력하지 않음. 왼손은 그대로 입력함
         rest, bent = (20.0,) * 4, (35.0, 20.0, 20.0, 20.0)
 
         def frames(run, hand, count, ratios, flex):
@@ -301,7 +301,7 @@ class FrameTest(unittest.TestCase):
             self.assertEqual(run.typer.ime.text, expected, hand)
 
     def test_shallow_repinch_counts_twice(self):
-        # 눌린 채 0.14만 벌렸다가 다시 꼬집어도 두 번 입력되어 ㄱ → ㅋ으로 순환한다.
+        # 0.14만 벌렸다가 다시 핀치해도 두 번 입력되어 ㄱ이 ㅋ으로 순환함
         run = Runner().ready()
         pressed, half = sig(pinched(0, 0.05)), sig(pinched(0, 0.19))
         run.frames(3, sig(), pressed).frames(3, sig(), half).frames(3, sig(), pressed).frames(3, sig(), sig())
@@ -327,7 +327,7 @@ class FrameTest(unittest.TestCase):
 
 
 class EditKeyTest(unittest.TestCase):
-    """손등 키와 주먹 지움."""
+    """손등 키와 주먹 지움의 테스트"""
 
     def test_left_back_keys(self):
         run = Runner().ready().tap("Right", 0)  # ㄱ 후보
@@ -337,7 +337,7 @@ class EditKeyTest(unittest.TestCase):
         self.assertEqual((run.typer.ime.text, run.kinds("commit")), ("ㄱ .", [("commit", None)]))
 
     def test_right_back_index_is_commit_space(self):
-        # 오른손 손등 검지 = 확정/공백. 손등 중지·약지는 손가락이 가려 무시한다.
+        # 오른손 손등 검지는 확정 또는 공백이고, 손등 중지와 약지는 무시함
         run = Runner().ready().tap("Right", 2)  # ㄷ 후보
         back = sig(facing=BACK)
         run.frames(20, sig(), back)

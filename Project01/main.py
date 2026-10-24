@@ -1,10 +1,4 @@
-"""PinchKeyboard: 카메라로 손끝 핀치를 인식해 한글을 입력하는 프로그램의 실행 파일
-
-실행:  python Project01/main.py --camera 0
-단어:  python Project01/main.py --words      (단어 입력 시험, 기록은 data/words-날짜-시각.jsonl)
-시연:  python Project01/main.py --demo       (카메라 없이 고정 데이터 재생)
-채점:  python Project01/main.py --evaluate data/기록.jsonl [-v]
-"""
+"""카메라로 손끝 핀치를 인식해 한글을 입력하는 PinchKeyboard의 실행 파일"""
 
 import argparse
 import json

@@ -26,6 +26,7 @@ Project01/
 ├── hud.py          카메라 영상 위 화면(손끝 버튼, 손바닥 원형 표시, 입력 줄)
 ├── record.py       프레임 기록(--log), 단어 입력 시험(--words), 기록 재생 채점
 ├── visionos/       확장: Vision Pro 시험 앱(PinchKeyboard). 아래 "창의성 및 확장성" 참고
+├── EXPLAIN.md      코드 설명: 실행 흐름 다이어그램, 핵심 로직 코드, 함수마다 존재 이유와 호출 위치
 ├── tests/          단위 테스트(카메라 없이 실행)
 └── fixtures/       고정 데이터: 키 입력 시퀀스와 정답(pinch-typer-keys.json), 실제 손 관절(handedness.json)
 ```

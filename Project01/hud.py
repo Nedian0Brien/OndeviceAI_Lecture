@@ -1,45 +1,57 @@
-"""카메라 영상 위에 그리는 입력기 화면(선 HUD).
+"""카메라 영상 위에 입력기 화면(선 HUD)을 그리는 모듈"""
 
-draw_hud가 한 프레임을 그립니다. 그리는 순서
-  손마다(draw_hand)  골격선 → 손바닥 원형 표시(draw_palm_hub) → 손끝 버튼과 순환 대기 글자 → 엄지 점 → 모음 끌기
-  화면 위            입력 한 줄(draw_input_line) → 순환 중인 그룹(draw_cycle_row) → 단어 입력 안내(draw_word_panel)
-  화면 아래          자판 지도(K) → 상태 안내 → 도움말(H)
-
-판정은 하지 않습니다. typer(PinchTyper)의 상태를 읽어 보여 주기만 합니다. 애니메이션(손끝 버튼 펼침, 순환, 입력
-표시)의 진행 상태는 ui dict(project01.run)에 남깁니다.
-Vision Pro 앱(visionos/)도 같은 값으로 같은 모양을 그립니다.
-"""
-
+from functools import lru_cache
 import math
+from pathlib import Path
 import time
 
-from common.canvas import (ACCENT, ACCENT_FILL, BACKDROP, LINE, LINE_DIM, MUTED, WHITE, HudCanvas, ellipsize_left,
-                           hud_font, hud_text_width, rounded_rectangle)
-from common.landmarks import DISTAL_SEGMENTS, FINGER_MCPS, FINGER_TIPS, HAND_CONNECTIONS, MIDDLE_MCP, THUMB_TIP, WRIST
-from layout import DRAG_MIN, DRAG_STROKES, KEYS, VOWEL_LABELS, cycle_queue, group_of, key_label
+import cv2
+import numpy as np
+from PIL import Image, ImageDraw, ImageFilter, ImageFont
+
+from hand import DISTAL_SEGMENTS, FINGER_MCPS, FINGER_TIPS, HAND_CONNECTIONS, MIDDLE_MCP, THUMB_TIP, WRIST
+from keyboard import DRAG_MIN, DRAG_STROKES, KEYS, VOWELS, cycle_queue, group_of, key_label
 
 
+# 색은 (R, G, B, 불투명도)임. 가는 선과 눈금으로 정보를 나타내고 강조색은 파랑 한 가지만 씀
+WHITE = (250, 250, 252, 255)
+MUTED = (230, 231, 236, 215)
+LINE = (236, 240, 248, 225)
+LINE_DIM = (236, 240, 248, 95)
+ACCENT = (158, 197, 255, 255)
+ACCENT_FILL = (46, 74, 128, 150)
+BACKDROP = (8, 10, 16, 120)  # 밝은 영상 위에서도 선과 글자가 보이게 까는 어두운 면
+HALO = (8, 10, 16, 120)  # 가는 선 아래에 까는 어두운 테두리
 DIM = (200, 202, 210, 150)
 OK_GREEN = (126, 224, 176, 255)
 DELETE_RED = (255, 128, 116, 255)
-OUTLINE = (28, 29, 34, 170)  # 밝은 영상 위 글자 외곽선
+OUTLINE = (28, 29, 34, 170)  # 밝은 영상 위 글자의 외곽선
 WARN_YELLOW = (255, 214, 102, 255)
 
+FONT_SIZES = (16, 21, 29)
+FONT_CANDIDATES = (
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # Ubuntu와 Jetson의 fonts-noto-cjk
+    "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansKR-Regular.ttf",
+    "C:/Windows/Fonts/malgun.ttf",
+    "/System/Library/Fonts/AppleSDGothicNeo.ttc",  # macOS
+)
+
 CYCLE_ANIM = 0.25  # 순환할 때 대기 글자가 한 칸 올라오는 시간(초)
-# 손끝 버튼(직선 도넛): 짧은 직선 DONUT_BARS개를 원형으로 늘어놓음. 직선은 버튼 반지름의 DONUT_INNER~DONUT_OUTER배
+# 손끝 버튼은 짧은 직선 30개를 원형으로 늘어놓은 모양이고, 직선은 버튼 반지름의 0.84~1.04배 자리에 놓음
 DONUT_BARS, DONUT_INNER, DONUT_OUTER = 30, 0.84, 1.04
-# 손끝 버튼 지름: 손끝 사이 가장 좁은 간격 × TIP_SPACING을 640x480 기준 TIP_MIN~TIP_MAX로 자름. 한 글자 라벨은 지름의
-# TIP_GLYPH배, 여러 글자 라벨(공백·확정 등)은 TIP_WORD 크기. 2026-10-24 Mac 화면에서 글자가 보이지 않아 키움(이전 12~21,
-# × 0.75, 0.55, 10): 1280x720 단어 입력 기록에서 지름이 상한 31.5px에 95% 걸려 있었고, 간격으로는 중앙값 62px까지 됨
+# 손끝 버튼 지름은 손끝 사이 가장 좁은 간격의 0.8배를 640x480 기준 16~36픽셀로 자른 값임
+# 2026-10-24 Mac 화면에서 글자가 보이지 않아 키웠음(이전 12~21픽셀)
 TIP_SPACING, TIP_MIN, TIP_MAX, TIP_GLYPH, TIP_WORD = 0.8, 16, 36, 0.6, 13
-HUB_BARS, HUB_GAP = 96, 70  # 손바닥 원 바깥 막대 링의 막대 수, 손목 쪽에 비워 두는 각도(°)
-HUB_HINT = "주먹 쥐기로 지움"  # 손바닥 원 가운데 문구(주먹을 쥐면 "지움")
-# 손바닥 원 반지름(손 길이 비율): 띠 안쪽·막대 시작·눈금자·바깥 막대 링. 바깥 링이 손가락 뿌리를 넘지 않게 작게 둠
+HUB_BARS, HUB_GAP = 96, 70  # 손바닥 원 바깥 막대 수와, 손목 쪽에 비워 두는 각도(도)
+HUB_HINT = "주먹 쥐기로 지움"
+# 손바닥 원의 띠 안쪽, 막대 시작, 눈금자, 바깥 막대의 반지름(손 크기에 대한 비율)
+# 바깥 막대가 손가락 뿌리를 넘지 않게 작게 둠
 HUB_BAND, HUB_BARS_AT, HUB_SCALE, HUB_RING = 0.23, 0.28, 0.39, 0.42
-# 입력 표시: 입력될 때 손바닥 가운데에 그 글자가 ECHO_IN초에 나타나 ECHO_HOLD초까지 머물고 ECHO_OUT초까지 커지며 사라짐
+# 입력한 글자는 손바닥 가운데에 0.08초 동안 나타나 0.25초까지 머물고 0.6초까지 커지며 사라짐
 ECHO_IN, ECHO_HOLD, ECHO_OUT = 0.08, 0.25, 0.6
-# 손끝 버튼 접기·펼치기: 주먹을 쥐면 SPREAD_CLOSE초에 손바닥 가운데로 모여 사라지고, 손을 편 뒤 SPREAD_HOLD초가 지나면
-# SPREAD_OPEN초에 손끝 자리로 펼쳐짐. SPREAD_HOLD는 주먹 판정이 프레임마다 흔들릴 때 버튼이 들썩이지 않게 함
+# 주먹을 쥐면 손끝 버튼이 0.15초에 손바닥 가운데로 모이고, 손을 편 뒤 0.15초가 지나면 0.35초에 펼쳐짐
+# 펼치기 전에 기다리는 시간은 주먹 판정이 프레임마다 흔들릴 때 버튼이 들썩이지 않게 하기 위함
 SPREAD_OPEN, SPREAD_CLOSE, SPREAD_HOLD = 0.35, 0.15, 0.15
 
 HELP_LINES = [
@@ -54,164 +66,336 @@ HELP_LINES = [
 ]
 
 
-# --- 작은 도구 ----------------------------------------------------------------------
+# --- 글꼴과 글자 ---
+
+def load_fonts(requested=None):
+    """한글 글꼴을 작음·보통·큼 세 크기로 불러오는 함수"""
+    if requested:
+        path = Path(requested).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError("한글 폰트 파일이 없습니다: " + str(path))
+    else:
+        path = next((Path(name) for name in FONT_CANDIDATES if Path(name).is_file()), None)
+        if path is None:
+            raise FileNotFoundError("한글 폰트를 찾지 못했습니다. --font /경로/폰트.ttf 를 지정하세요.")
+    return tuple(ImageFont.truetype(str(path), size) for size in FONT_SIZES)
+
+
+# 같은 글자를 매 프레임 다시 그리지 않도록 글꼴 크기, 글자 폭, 글자 이미지를 캐시함
+@lru_cache(maxsize=96)
+def hud_font(font, size):
+    return font.font_variant(size=size)
+
+
+@lru_cache(maxsize=1024)
+def hud_text_width(text, font):
+    return font.getlength(text)
+
+
+@lru_cache(maxsize=384)
+def hud_text_sprite(text, font, fill, anchor, stroke_width, stroke_fill):
+    """글자 하나를 작은 RGBA 이미지로 그려 기준점까지의 위치와 함께 돌려주는 함수"""
+    left, top, right, bottom = font.getbbox(text, anchor=anchor, stroke_width=stroke_width)
+    sprite = Image.new("RGBA", (max(1, right - left), max(1, bottom - top)))
+    ImageDraw.Draw(sprite).text((-left, -top), text, font=font, fill=fill, anchor=anchor,
+                               stroke_width=stroke_width, stroke_fill=stroke_fill)
+    return sprite, left, top
+
+
+def ellipsize_left(text, font, available):
+    """폭을 넘는 글자열의 앞부분을 "…"로 줄이는 함수"""
+    # 입력 줄은 마지막 글자가 보여야 하므로 뒤를 남김. 남길 글자 수를 이분 탐색함
+    if hud_text_width(text, font) <= available:
+        return text
+    low, high = 0, len(text)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if hud_text_width("…" + text[-middle:], font) <= available:
+            low = middle
+        else:
+            high = middle - 1
+    return "…" + (text[-low:] if low else "")
+
+
+def rounded_rectangle(draw, bounds, radius, **style):
+    """좌표를 정수로 맞춰 모서리가 둥근 사각형을 그리는 함수"""
+    # Pillow 12.3은 좌표가 소수이고 폭이 반지름의 2배에 가까우면 ValueError를 냄(무작위 2만 회 중 8%)
+    # 좌표를 정수로 반올림하고 반지름을 짧은 변의 절반 이하로 제한하면 생기지 않음
+    x1, y1, x2, y2 = (round(v) for v in bounds)
+    draw.rounded_rectangle((x1, y1, x2, y2), radius=max(0, min(round(radius), (x2 - x1) // 2, (y2 - y1) // 2)),
+                           **style)
+
+
+# --- 캔버스 ---
+
+class HudCanvas:
+    """BGR 프레임 위에 선 HUD를 그리는 클래스"""
+    # 각도는 12시 방향이 0°이고 시계 방향으로 잼. 크기는 640x480 기준 값에 화면 배율(scale)을 곱함
+    # 번지는 효과(glow)는 따로 그린 층을 흐리게 해서 overlay 아래에 깖
+
+    def __init__(self, frame, fonts):
+        self.h, self.w = frame.shape[:2]
+        self.scale = min(self.w / 640, self.h / 480)
+        self.stroke = max(1, round(self.scale))
+        self.small, self.normal, self.large = (hud_font(font, max(8, round(size * self.scale)))
+                                               for font, size in zip(fonts, (11, 14, 21)))
+        self.picture = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)).convert("RGBA")
+        self.overlay = Image.new("RGBA", self.picture.size)
+        self.draw = ImageDraw.Draw(self.overlay)
+        self.glow = Image.new("RGBA", self.picture.size)
+        self.glow_draw = ImageDraw.Draw(self.glow)
+
+    def write(self, position, text, font, fill, anchor="la", stroke_width=0, stroke_fill=None, glow=False):
+        """글자를 position에 anchor 기준으로 놓는 메서드"""
+        sprite, left, top = hud_text_sprite(text, font, fill, anchor, stroke_width, stroke_fill)
+        self.overlay.alpha_composite(sprite, (round(position[0] + left), round(position[1] + top)))
+        if glow:
+            self.glow.alpha_composite(sprite, (round(position[0] + left), round(position[1] + top)))
+
+    @staticmethod
+    def polar(center, radius, degrees):
+        a = math.radians(degrees)
+        return center[0] + radius * math.sin(a), center[1] - radius * math.cos(a)
+
+    def _line_width(self, width):
+        return max(1, round(width if width is not None else self.scale))
+
+    def hairline_circle(self, center, radius, color, width=None, fill=None, glow=False):
+        """어두운 테두리를 깐 가는 원을 그리는 메서드"""
+        x, y = center
+        line = self._line_width(width)
+        box = (x - radius, y - radius, x + radius, y + radius)
+        if fill is not None:
+            self.draw.ellipse(box, fill=fill)
+        self.draw.ellipse((x - radius - 1, y - radius - 1, x + radius + 1, y + radius + 1), outline=HALO,
+                          width=line + 2)
+        self.draw.ellipse(box, outline=color, width=line)
+        if glow:
+            self.glow_draw.ellipse(box, outline=color, width=line + 2)
+
+    def ticks(self, center, radius, length, count, color, lit=0, lit_color=None, width=None, start=0.0, end=360.0,
+              glow=False):
+        """원 둘레에 짧은 눈금 count개를 그리고 앞에서부터 lit개를 켜는 메서드"""
+        line = self._line_width(width)
+        span = end - start
+        # 한 바퀴면 끝 눈금이 첫 눈금과 겹치지 않게 count등분, 호면 양 끝에 눈금이 오게 count-1등분함
+        step = span / count if span >= 360 else span / max(1, count - 1)
+        for k in range(count):
+            angle = start + k * step
+            on = k < lit
+            a, b = self.polar(center, radius, angle), self.polar(center, radius + length, angle)
+            ink = (lit_color or color) if on else color
+            self.draw.line((a, b), fill=ink, width=line)
+            if glow and on:
+                self.glow_draw.line((a, b), fill=ink, width=line + 2)
+
+    def dashed_circle(self, center, radius, color, dashes=32, duty=0.5, width=None):
+        x, y = center
+        line = self._line_width(width)
+        box = (x - radius, y - radius, x + radius, y + radius)
+        step = 360 / dashes
+        for k in range(dashes):
+            begin = -90 + k * step
+            self.draw.arc(box, begin, begin + step * duty, fill=color, width=line)
+
+    def pointer(self, center, radius, degrees, size, color, glow=False):
+        """원 바깥에서 degrees 방향을 가리키는 작은 삼각형을 그리는 메서드"""
+        tip = self.polar(center, radius + size, degrees)
+        left = self.polar(center, radius, degrees - size / max(radius, 1) * 40)
+        right = self.polar(center, radius, degrees + size / max(radius, 1) * 40)
+        self.draw.polygon((tip, left, right), fill=color)
+        if glow:
+            self.glow_draw.polygon((tip, left, right), fill=color)
+
+    @staticmethod
+    def _box(center, radius):
+        return center[0] - radius, center[1] - radius, center[0] + radius, center[1] + radius
+
+    def arc(self, center, radius, start, end, color, width=None, glow=False):
+        line = self._line_width(width)
+        # Pillow arc는 3시 방향이 0°라 12시 기준 각도에서 90°를 뺌
+        self.draw.arc(self._box(center, radius), start - 90, end - 90, fill=color, width=line)
+        if glow:
+            self.glow_draw.arc(self._box(center, radius), start - 90, end - 90, fill=color, width=line + 2)
+
+    def band(self, center, inner, outer, start, end, fill, glow=False):
+        """반지름 inner에서 outer까지의 두꺼운 호를 그리는 메서드"""
+        width = max(1, round(outer - inner))
+        self.draw.arc(self._box(center, outer), start - 90, end - 90, fill=fill, width=width)
+        if glow:
+            self.glow_draw.arc(self._box(center, outer), start - 90, end - 90, fill=fill, width=width)
+
+    def glow_line(self, points, color, width):
+        self.draw.line(points, fill=HALO, width=width + 2, joint="curve")
+        self.draw.line(points, fill=color, width=width, joint="curve")
+        self.glow_draw.line(points, fill=color, width=width + 3, joint="curve")
+
+    def clear_circle(self, center, radius):
+        """그동안 그린 HUD를 원 영역만큼 지우는 메서드"""
+        # 버튼 둘레를 비워 뒤에 그린 요소가 버튼을 가리지 않게 함
+        box = self._box(center, radius)
+        self.draw.ellipse(box, fill=(0, 0, 0, 0))
+        self.glow_draw.ellipse(box, fill=(0, 0, 0, 0))
+
+    def panel(self, bounds, active=False, radius=None):
+        """어두운 면과 가는 테두리로 된 패널을 그리는 메서드"""
+        r = 4 * self.scale if radius is None else radius
+        rounded_rectangle(self.draw, bounds, r, fill=ACCENT_FILL if active else BACKDROP,
+                          outline=ACCENT if active else LINE_DIM, width=self._line_width(None))
+
+    def finish(self):
+        """번짐 층과 overlay를 영상에 합성해 BGR 프레임으로 돌려주는 메서드"""
+        picture = self.picture
+        box = self.glow.getbbox()
+        if box is not None:
+            # 그린 영역만 잘라 절반으로 줄이고 흐리게 한 뒤 다시 키워 더함. 화면 전체를 흐리게 하는 것보다 빠름
+            pad = round(8 * self.scale)
+            x1, y1 = max(0, box[0] - pad), max(0, box[1] - pad)
+            x2, y2 = min(picture.width, box[2] + pad), min(picture.height, box[3] + pad)
+            region = self.glow.crop((x1, y1, x2, y2))
+            small = region.reduce(2) if min(region.size) >= 4 else region
+            blurred = small.filter(ImageFilter.GaussianBlur(max(1.5, 2.5 * self.scale))).resize(region.size,
+                                                                                               Image.BILINEAR)
+            picture.paste(Image.alpha_composite(picture.crop((x1, y1, x2, y2)), blurred), (x1, y1))
+        picture = Image.alpha_composite(picture, self.overlay).convert("RGB")
+        return cv2.cvtColor(np.asarray(picture), cv2.COLOR_RGB2BGR)
+
+
+# --- 작은 계산 ---
 
 def write(canvas, position, text, font, fill, anchor="la", outline=False):
-    """글자를 씁니다. outline이면 어두운 외곽선을 둘러 밝은 영상 위에서도 읽히게 합니다."""
+    """글자를 쓰고, outline이면 어두운 외곽선을 두르는 함수"""
     canvas.write(position, text, font, fill, anchor, canvas.stroke if outline else 0, OUTLINE if outline else None)
 
 
 def faded(color, k):
-    """color의 불투명도에 k(0~1)를 곱합니다."""
     return color[:3] + (max(0, min(255, round(color[3] * k))),)
 
 
 def with_alpha(color, alpha):
-    """color의 불투명도를 alpha(0~255)로 바꿉니다."""
     return color[:3] + (round(alpha),)
 
 
 def bearing(center, point):
-    """center에서 point로 가는 방향(12시 0°에서 시계 방향, 화면 좌표)."""
+    """center에서 point로 가는 방향 각도를 구하는 함수"""
     return math.degrees(math.atan2(point[0] - center[0], center[1] - point[1])) % 360
 
 
 def toward(palm, point, spread):
-    """손끝 버튼 펼침 위치: spread 0이면 손바닥 가운데(palm), 1이면 제자리(point)."""
+    """손바닥 가운데(spread 0)와 제자리(spread 1) 사이의 위치를 구하는 함수"""
     return palm[0] + (point[0] - palm[0]) * spread, palm[1] + (point[1] - palm[1]) * spread
 
 
 def finger_path_point(points, finger, start, fraction):
-    """손가락 위 경로(손끝 버튼 자리 start → TIP → DIP → PIP)에서 길이 비율 fraction(0~1)의 점을 돌려줍니다.
-
-    순환 대기 글자가 이 경로에 놓입니다. 끝(마지막 대기 글자)을 PIP 관절로 두어 손바닥 원과 겹치지 않게 합니다.
-    """
+    """손끝 버튼 자리에서 손가락 관절을 따라 PIP까지 가는 경로 위의 점을 구하는 함수"""
+    # 순환 대기 글자를 이 경로에 놓음. 끝을 PIP로 두어 손바닥 원과 겹치지 않게 함
     mcp = FINGER_MCPS[finger]
-    path = [start] + [points[mcp + i] for i in (3, 2, 1)]  # 손끝 버튼 → TIP → DIP → PIP
+    path = [start] + [points[mcp + i] for i in (3, 2, 1)]
     lengths = [math.dist(a, b) for a, b in zip(path, path[1:])]
-    remaining = max(0.0, min(1.0, fraction)) * sum(lengths)  # 경로 처음부터 가야 할 길이
-    # 구간을 차례로 지나며 남은 길이가 들어가는 구간을 찾고, 그 구간 안에서 선형 보간함
+    remaining = max(0.0, min(1.0, fraction)) * sum(lengths)
     for (a, b), length in zip(zip(path, path[1:]), lengths):
         if remaining <= length or length == 0 and remaining == 0:
             k = remaining / length if length else 0.0
             return a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k
         remaining -= length
-    return path[-1]  # 부동소수 오차로 끝을 넘으면 PIP
+    return path[-1]
 
 
 def tip_home(points, finger, diameter):
-    """손끝 버튼 제자리: 손가락 끝마디 방향으로 손끝 바로 바깥(지름 × 0.85). (중심, 끝마디 방향 단위 벡터)"""
+    """손끝 바로 바깥의 버튼 자리와 끝마디 방향 단위 벡터를 구하는 함수"""
     tx, ty = points[FINGER_TIPS[finger]]
-    dx, dy = tx - points[DISTAL_SEGMENTS[finger][0]][0], ty - points[DISTAL_SEGMENTS[finger][0]][1]  # DIP → TIP
+    dx, dy = tx - points[DISTAL_SEGMENTS[finger][0]][0], ty - points[DISTAL_SEGMENTS[finger][0]][1]
     norm = math.hypot(dx, dy) or 1.0
     return (tx + dx / norm * diameter * 0.85, ty + dy / norm * diameter * 0.85), (dx / norm, dy / norm)
 
 
-# --- 애니메이션 -----------------------------------------------------------------------
+# --- 애니메이션 ---
 
 def spread_motion(spreads, hand, closed, now):
-    """손끝 버튼 펼침 정도(0 손바닥 가운데에 모여 안 보임 ~ 1 손끝 자리, ease-out 적용)를 돌려줍니다.
-
-    spreads: 손별 (선형 진행, 직전 시각, 마지막으로 주먹이던 시각)을 담는 dict(ui["spreads"]). 처음 보이는 손은 0에서
-    시작해 펼쳐집니다. closed: 이번 프레임이 주먹 자세인지(FingerPinch.closed).
-    """
+    """손끝 버튼이 펼쳐진 정도(0에서 1 사이)를 구하는 함수"""
+    # spreads에 손마다 (진행, 직전 시각, 마지막으로 주먹이던 시각)을 남김. 처음 보이는 손은 0에서 펼쳐짐
     value, last, closed_at = spreads.get(hand, (0.0, now, None))
-    if closed:  # 주먹 자세인 마지막 시각을 기억함
+    if closed:
         closed_at = now
-    step = max(0.0, now - last)  # 직전 프레임 뒤 지난 시간
-    if closed_at is not None and now - closed_at < SPREAD_HOLD:  # 주먹 중이거나 편 지 얼마 안 됨: 접음
+    step = max(0.0, now - last)
+    if closed_at is not None and now - closed_at < SPREAD_HOLD:
         value = max(0.0, value - step / SPREAD_CLOSE)
-    else:  # 편 손이 SPREAD_HOLD 넘게 이어짐: 펼침
+    else:
         value = min(1.0, value + step / SPREAD_OPEN)
     spreads[hand] = (value, now, closed_at)
     return 1 - (1 - value) ** 3
 
 
 def cycle_motion(cycles, slot, queue, now):
-    """순환 애니메이션 진행(0~1)과 직전 대기열을 돌려줍니다.
-    대기열이 한 칸 돌았을 때만 움직이고, 그 밖의 변화는 바로 바꿉니다.
-
-    cycles: 손가락별 (대기열, 바뀐 시각, 직전 대기열)을 담는 dict(ui["cycles"]).
-    """
+    """순환 애니메이션 진행과 직전 대기열을 구하는 함수"""
+    # 대기열이 한 칸 돌았을 때만 움직이고, 그 밖의 변화는 바로 바꿈
     old = cycles.get(slot)
-    if old is None or old[0] != queue:  # 대기열이 바뀜
-        # 한 칸 돌았는지: 직전 대기열의 두 번째부터가 지금 대기열의 앞부분과 같음(맨 앞 글자가 입력되어 빠짐)
+    if old is None or old[0] != queue:
         turned = old is not None and len(queue) > 1 and old[0][1:] == queue[:-1]
         cycles[slot] = (queue, now if turned else None, old[0] if turned else None)
     queue, since, previous = cycles[slot]
-    if since is None or now - since >= CYCLE_ANIM:  # 애니메이션이 없거나 끝남
+    if since is None or now - since >= CYCLE_ANIM:
         return 1.0, None
     linear = (now - since) / CYCLE_ANIM
-    return 1 - (1 - linear) ** 3, previous  # ease-out: 빠르게 출발해 부드럽게 멈춤
+    return 1 - (1 - linear) ** 3, previous
 
 
 def echo_look(age):
-    """입력 표시가 나온 지 age초일 때 (불투명도, 배율)을 돌려줍니다. 끝났으면 None입니다."""
-    if age < 0 or age >= ECHO_OUT:  # 표시 시간 밖
+    """입력 표시가 나온 지 age초일 때의 불투명도와 배율을 구하는 함수"""
+    if age < 0 or age >= ECHO_OUT:
         return None
-    if age < ECHO_IN:  # 나타나는 중: 투명 → 불투명, 0.85배 → 1배
+    if age < ECHO_IN:
         return age / ECHO_IN, 0.85 + 0.15 * age / ECHO_IN
-    if age < ECHO_HOLD:  # 머무는 중
+    if age < ECHO_HOLD:
         return 1.0, 1.0
-    out = (age - ECHO_HOLD) / (ECHO_OUT - ECHO_HOLD)  # 사라지는 중: 커지며 투명해짐
+    out = (age - ECHO_HOLD) / (ECHO_OUT - ECHO_HOLD)
     return 1 - out, 1 + 0.15 * out
 
 
 def echo_view(ui, typer, now):
-    """손바닥 가운데 입력 표시: (손, 글자, 불투명도, 배율) 또는 None. typer.echo 번호가 바뀐 화면 시각부터 잽니다."""
-    if typer.echo is None:  # 아직 입력이 없음
+    """손바닥 가운데에 띄울 입력 표시의 손, 글자, 불투명도, 배율을 구하는 함수"""
+    if typer.echo is None:
         return None
     seen = ui.get("echo")
-    if seen is None or seen[0] != typer.echo[0]:  # 새 입력: 표시 시작 시각을 지금으로 둠
+    if seen is None or seen[0] != typer.echo[0]:  # 새 입력이면 표시 시작 시각을 지금으로 둠
         ui["echo"] = seen = (typer.echo[0], now)
     look = echo_look(now - seen[1])
     return None if look is None else (typer.echo[1], typer.echo[2], *look)
 
 
-# --- 손 ---------------------------------------------------------------------------
+# --- 손 ---
 
 def draw_palm_hub(canvas, points, state, progresses, paths, spread, font, echo=None):
-    """손바닥 가운데 원형 표시를 그립니다.
-
-    - 안쪽 파랑 반투명 띠: 손가락 방향마다 막대 3개, 길이 = 다가옴 진행. 누르는 손가락 방향의 띠는 밝게.
-    - 눈금자 호(손가락 쪽): 삼각형이 누르는 손가락(없으면 가장 많이 다가온 손가락) 방향을 가리킵니다.
-    - 바깥 막대 링: 손목 쪽을 비운 촘촘한 막대. 주먹 지움 진행만큼 빨갛게 켜집니다.
-    - 가운데: "주먹 쥐기로 지움"(주먹이면 "지움"), 입력 직후에는 그 글자(echo: (글자, 불투명도, 배율)).
-    paths: 손가락별 MCP → PIP → DIP → TIP → 손끝 버튼. 손가락 방향 각도(MCP 쪽)에 씁니다.
-    spread: 손끝 버튼 펼침(주먹이면 0). 안쪽 층은 함께 사라지고 바깥 막대 링(지움)은 남습니다.
-    """
+    """손바닥 가운데 원형 표시를 그리는 함수"""
+    # 안쪽 띠의 막대는 손가락마다 다가온 정도, 삼각형은 누르는 손가락, 바깥 막대는 주먹 지움 진행을 나타냄
     s = canvas.scale
     palm = (WRIST, 5, 9, 13, 17)
-    c = (sum(points[i][0] for i in palm) / 5, sum(points[i][1] for i in palm) / 5)  # 손목과 네 손가락 뿌리의 평균
+    c = (sum(points[i][0] for i in palm) / 5, sum(points[i][1] for i in palm) / 5)
     size = math.dist(points[WRIST], points[MIDDLE_MCP])
     r_band, r_bars, r_scale, r_ring = HUB_BAND * size, HUB_BARS_AT * size, HUB_SCALE * size, HUB_RING * size
     wrist = bearing(c, points[WRIST])
-    away = wrist + 180  # 손가락 쪽 가운데: 각도를 이 둘레로 펴서 0°/360° 경계를 넘지 않게 함
+    away = wrist + 180  # 각도를 손가락 쪽 가운데 둘레로 펴서 0°와 360° 경계를 넘지 않게 함
     angles = [away + ((bearing(c, path[0]) - away + 180) % 360) - 180 for path in paths]
-    lo, hi = min(angles) - 22, max(angles) + 22  # 눈금자·띠를 그릴 각도 범위
+    lo, hi = min(angles) - 22, max(angles) + 22
     k = spread
-    # 바깥 막대 링(주먹 지움 진행)
     canvas.ticks(c, r_ring, 0.04 * size, HUB_BARS, (236, 240, 248, 90), lit=round(state.fist.progress * HUB_BARS),
                  lit_color=DELETE_RED, start=wrist + HUB_GAP / 2, end=wrist + 360 - HUB_GAP / 2,
                  width=max(1, round(1.2 * s)))
     if k > 0.05:  # 손끝 버튼이 펼쳐져 있을 때만 안쪽 층을 그림
-        # 눈금자 호: 작은 눈금 3°, 큰 눈금 15°
         canvas.arc(c, r_scale, lo - 10, hi + 10, faded(LINE, 0.8 * k))
         canvas.ticks(c, r_scale - 0.02 * size, 0.02 * size, int((hi - lo + 20) / 3) + 1, faded(LINE_DIM, k),
                      start=lo - 10, end=hi + 10, width=1)
         canvas.ticks(c, r_scale - 0.04 * size, 0.04 * size, int((hi - lo + 20) / 15) + 1, faded(LINE, 0.8 * k),
                      start=lo - 10, end=hi + 10, width=1)
-        # 안쪽 파랑 띠와 손가락 방향 막대 묶음
         canvas.band(c, r_band, r_bars - 0.02 * size, lo, hi, faded(ACCENT_FILL, 0.7 * k))
         canvas.arc(c, r_band, lo, hi, faded(LINE_DIM, k), width=1)
-        # 삼각형이 가리킬 손가락: 누르는 손가락, 없으면 0.2 넘게 다가온 손가락 중 가장 많이 다가온 손가락
+        # 삼각형은 누르는 손가락을, 누르는 손가락이 없으면 0.2 넘게 다가온 손가락 중 가장 많이 다가온 손가락을 가리킴
         target = state.pinch.active
         if target is None and max(progresses) > 0.2:
             target = max(range(4), key=progresses.__getitem__)
-        # 손가락마다 그 방향에 막대 3개(길이 = 다가옴 진행, 누르는 손가락은 최대 길이와 번짐)
         for finger, angle in enumerate(angles):
             pressed = state.pinch.active == finger
-            if pressed:  # 누르는 손가락 방향의 띠를 밝게
+            if pressed:
                 canvas.band(c, r_band, r_bars - 0.02 * size, angle - 8, angle + 8, faded(ACCENT, 0.55 * k), glow=True)
             amount = 1.0 if pressed else progresses[finger]
             ink = faded(ACCENT, k) if amount > 0 else faded(LINE_DIM, k)
@@ -225,12 +409,12 @@ def draw_palm_hub(canvas, points, state, progresses, paths, spread, font, echo=N
         if target is not None:
             canvas.pointer(c, r_scale + 2 * s, angles[target], 5 * s, faded(ACCENT, k), glow=True)
         canvas.dashed_circle(c, 0.10 * size, faded(LINE_DIM, k), dashes=24)
-    # 가운데 문구: 주먹 진행 중 "지움" > 입력 직후 그 글자 > 평소 안내 문구
+    # 가운데 문구는 주먹 지움 진행 중이면 "지움", 입력 직후면 그 글자, 평소에는 안내 문구임
     if state.fist.progress > 0:
         canvas.write(c, "지움", font, DELETE_RED, "mm", canvas.stroke, OUTLINE)
     elif echo is not None:
         text, alpha, grow = echo
-        ratio = 0.18 if len(text) == 1 else 0.09  # 한 글자는 크게, 공백·확정 같은 이름은 작게
+        ratio = 0.18 if len(text) == 1 else 0.09
         canvas.write(c, text, hud_font(font, max(10, round(ratio * size * grow))), faded(WHITE, alpha), "mm",
                      canvas.stroke, faded(OUTLINE, alpha), glow=True)
     elif k > 0.05:
@@ -238,34 +422,30 @@ def draw_palm_hub(canvas, points, state, progresses, paths, spread, font, echo=N
 
 
 def draw_cycle_queue(canvas, ui, key, points, finger, queue, home, direction, diameter, palm, spread, fonts, now):
-    """순환 대기 글자를 그립니다.
-    다음 글자들이 손가락을 따라 PIP 쪽에서 기다리고, 순환하면 한 칸씩 손끝으로 올라옵니다.
-
-    손끝 버튼의 지금 중심(올라오는 중이면 경로 위, 아니면 제자리 home)을 돌려줍니다.
-    """
+    """손가락을 따라 순환 대기 글자를 그리고 손끝 버튼의 지금 중심을 돌려주는 함수"""
+    # 다음 글자들이 PIP 쪽에서 기다리다가 순환하면 한 칸씩 손끝으로 올라옴
     s = canvas.scale
     eased, previous = cycle_motion(ui.setdefault("cycles", {}), key, tuple(queue), now)
-    waiting = len(queue) - 1  # 손끝 버튼(queue[0])을 뺀 대기 글자 수
+    waiting = len(queue) - 1
     small_d = diameter * 0.7 * spread
     wait_font = hud_font(fonts[1], max(8, round(small_d * 0.6)))
-    if spread >= 0.05:  # 버튼이 펼쳐져 있을 때만 대기 글자를 그림
-        # 먼 자리(PIP 쪽)부터 손끝 쪽으로 대기 글자를 놓음
+    if spread >= 0.05:
         for slot in range(waiting, 0, -1):
             fraction = slot / waiting
             if previous is not None and slot < waiting:  # 한 칸 아래 자리에서 올라오는 중
                 fraction = (slot + 1) / waiting + (fraction - (slot + 1) / waiting) * eased
             wx, wy = toward(palm, finger_path_point(points, finger, home, fraction), spread)
-            canvas.clear_circle((wx, wy), small_d / 2 + 4 * s)  # 둘레를 비워 손바닥 원 요소가 가리지 않게
-            if previous is not None and slot == waiting:  # 마지막 자리는 손바닥 마디에서 나타남
+            canvas.clear_circle((wx, wy), small_d / 2 + 4 * s)
+            if previous is not None and slot == waiting:  # 마지막 자리는 손바닥 쪽에서 나타남
                 alpha = round(230 * eased / 16) * 16
                 write(canvas, (wx, wy), queue[slot], wait_font, with_alpha(WHITE, alpha * spread), "mm", True)
                 continue
             canvas.hairline_circle((wx, wy), small_d / 2, with_alpha(LINE, (150 - 40 * (slot - 1)) * spread),
                                    fill=with_alpha(BACKDROP, BACKDROP[3] * spread))
             write(canvas, (wx, wy), queue[slot], wait_font, with_alpha(WHITE, (215 - 50 * (slot - 1)) * spread), "mm")
-    if previous is None:  # 순환 애니메이션 중이 아님: 버튼은 제자리
+    if previous is None:
         return home
-    # 방금 입력된 글자: 손끝에서 조금 올라가며 사라짐. 다음 글자는 한 칸 아래에서 손끝으로 올라옴
+    # 방금 입력된 글자는 손끝에서 조금 올라가며 사라지고, 다음 글자는 한 칸 아래에서 손끝으로 올라옴
     lift = diameter * 0.8 * eased
     alpha = round(255 * (1 - eased) / 16) * 16
     (cx, cy), (dx, dy) = home, direction
@@ -275,127 +455,116 @@ def draw_cycle_queue(canvas, ui, key, points, finger, queue, home, direction, di
 
 
 def draw_tip_button(canvas, pinch, finger, text, center, diameter, spread, progress, ratios, fonts):
-    """손끝 버튼(직선 도넛)을 그립니다.
-    짧은 직선 DONUT_BARS개를 원형으로 늘어놓고, 진행만큼 12시부터 시계 방향으로 켭니다.
-
-    - 다가옴(꼬집기 진행): 흰 직선.
-    - 누르는 중: 안쪽이 파랑 면, 꺼진 직선이 옅은 파랑, 떼기 진행만큼 밝은 파랑(번짐).
-    """
+    """손끝 버튼을 그리는 함수"""
+    # 다가온 정도만큼 흰 직선을 켜고, 누르는 중에는 안쪽을 파랗게 칠하고 떼기 진행만큼 밝은 파랑을 켬
     s = canvas.scale
     px, py = center
     size = diameter * spread
-    word = hud_font(fonts[0], max(8, round(TIP_WORD * s * spread)))  # 여러 글자 라벨
+    word = hud_font(fonts[0], max(8, round(TIP_WORD * s * spread)))
     radius = max(size, hud_text_width(text, word) + 6 * s * spread) / 2  # 여러 글자 라벨이 들어가게 넓힘
     inner, outer = radius * DONUT_INNER, radius * DONUT_OUTER
     active = pinch.active == finger
-    if active and ratios is not None:  # 누르는 중: 떼기 진행만큼 파랑으로 켬
+    if active and ratios is not None:
         lit, base, lit_ink = round(pinch.release_progress(ratios) * DONUT_BARS), ACCENT[:3] + (90,), ACCENT
-    else:  # 그 밖: 다가옴 진행만큼 흰색으로 켬(펼치는 중에는 켜지 않음)
+    else:
         lit = round(progress * DONUT_BARS) if spread >= 1 else 0
         base, lit_ink = (236, 240, 248, 70), LINE
-    canvas.clear_circle((px, py), outer + 3 * s * spread)  # 둘레를 비워 손바닥 원 요소가 가리지 않게
+    canvas.clear_circle((px, py), outer + 3 * s * spread)
     fill = with_alpha(ACCENT_FILL, (ACCENT_FILL[3] + 60) * spread) if active else \
         with_alpha(BACKDROP, BACKDROP[3] * spread)
     canvas.draw.ellipse((px - inner, py - inner, px + inner, py + inner), fill=fill)
     canvas.ticks((px, py), inner, outer - inner, DONUT_BARS, with_alpha(base, base[3] * spread), lit=lit,
                  lit_color=with_alpha(lit_ink, lit_ink[3] * spread), width=max(1, round(s)), glow=active)
-    # 한 글자 라벨은 지름에 비례한 큰 글꼴, 여러 글자 라벨은 고정 크기 글꼴
     write(canvas, (px, py), text, hud_font(fonts[1], max(8, round(size * TIP_GLYPH))) if len(text) == 1 else word,
           with_alpha(WHITE, 255 * spread), "mm")
 
 
 def draw_vowel_drag(canvas, drag, points, diameter, fonts):
-    """모음 끌기를 그립니다: 꼬집은 지점(엄지 끝과 손끝의 가운데)이 지나온 길, 시작점 둘레의 끌기 기준 원(이 밖으로
-    나가면 끌기), 지금 떼면 들어갈 획. 판정(PinchTyper.drag_view)과 같은 점들입니다."""
+    """모음 끌기의 지나온 길, 기준 원, 지금 떼면 들어갈 획을 그리는 함수"""
     s, w, h = canvas.scale, canvas.w, canvas.h
     margin = 16 * s
-    passed = drag["drag"] is not None  # 끌기 기준을 넘었는지(넘으면 파랑)
+    passed = drag["drag"] is not None
     ink = ACCENT if passed else LINE
     path = drag["points"]
     ox, oy = path[0]
     radius = DRAG_MIN * drag["size"]
-    canvas.dashed_circle((ox, oy), radius, LINE_DIM)  # 끌기 기준 원: 파선 + 가로·세로 축 눈금
+    canvas.dashed_circle((ox, oy), radius, LINE_DIM)
     canvas.ticks((ox, oy), radius, 5 * s, 4, LINE)
-    if len(path) > 1:  # 지나온 길(점이 둘 이상일 때)
+    if len(path) > 1:
         canvas.glow_line(path, ink, max(2, round(3 * s)))
     ex, ey = path[-1]
     r = max(3, 3.5 * s)
-    canvas.draw.ellipse((ex - r, ey - r, ex + r, ey + r), fill=ink)  # 지금 꼬집기 지점
-    # 획 미리 보기: 꼬집은 지점에서 손목 → 중지 뿌리 방향으로 손끝 버튼 줄 바깥에 둠(버튼을 가리지 않게)
+    canvas.draw.ellipse((ex - r, ey - r, ex + r, ey + r), fill=ink)
+    # 획 미리 보기는 손끝 버튼을 가리지 않게 손목에서 중지 뿌리 방향으로 버튼 줄 바깥에 둠
     badge = diameter * 1.3
     ux, uy = points[MIDDLE_MCP][0] - points[WRIST][0], points[MIDDLE_MCP][1] - points[WRIST][1]
     norm = math.hypot(ux, uy) or 1.0
     bx, by = ex + ux / norm * diameter * 2.6, ey + uy / norm * diameter * 2.6
-    bx = min(max(bx, badge / 2 + margin), w - badge / 2 - margin)  # 화면 밖으로 나가지 않게
+    bx = min(max(bx, badge / 2 + margin), w - badge / 2 - margin)
     by = min(max(by, badge / 2 + margin), h - badge / 2 - margin)
     canvas.hairline_circle((bx, by), badge / 2, ACCENT if passed else LINE,
                            fill=ACCENT_FILL if passed else BACKDROP, glow=passed)
-    if passed:  # 끈 방향을 가리키는 삼각형
+    if passed:
         canvas.pointer((bx, by), badge / 2 + 2 * s, drag["pointer"], 5 * s, ACCENT, glow=True)
-    write(canvas, (bx, by), VOWEL_LABELS[DRAG_STROKES[drag["drag"]]],
+    write(canvas, (bx, by), VOWELS[DRAG_STROKES[drag["drag"]]],
           hud_font(fonts[1], max(10, round(badge * 0.62))), WHITE, "mm", True)
 
 
 def draw_hand(canvas, typer, label, points, ui, fonts, now):
-    """손 하나를 그립니다: 골격선, 엄지 가림 안내, 손바닥 원형 표시, 손끝 버튼, 엄지 점, 모음 끌기.
-    points: 픽셀 좌표 21개."""
+    """손 하나의 골격선, 손바닥 원형 표시, 손끝 버튼, 모음 끌기를 그리는 함수"""
     s, w, h = canvas.scale, canvas.w, canvas.h
     state = typer.hands[label]
-    for a, b in HAND_CONNECTIONS:  # 손 골격선
+    for a, b in HAND_CONNECTIONS:
         canvas.draw.line((points[a], points[b]), fill=(237, 242, 250, 95), width=canvas.stroke)
-    if typer.occluded(label):  # 소지 쪽으로 기울어 엄지가 가려짐: 이 자세의 꼬집기는 입력하지 않음
+    if typer.occluded(label):
         x, y = points[WRIST]
-        x, y = min(max(x, 40 * s), w - 40 * s), min(y + 12 * s, h - 20 * s)  # 안내 문구가 화면 안에 들어오게
+        x, y = min(max(x, 40 * s), w - 40 * s), min(y + 12 * s, h - 20 * s)
         write(canvas, (x, y), "엄지 쪽을 카메라로 돌려 주세요", canvas.small, WARN_YELLOW, "ma", True)
     tips = [points[tip] for tip in FINGER_TIPS]
-    spacing = min(math.dist(a, b) for a, b in zip(tips, tips[1:]))  # 이웃한 손끝 사이 가장 좁은 간격
-    diameter = min(TIP_MAX * s, max(TIP_MIN * s, spacing * TIP_SPACING))  # 손끝 버튼 지름
+    spacing = min(math.dist(a, b) for a, b in zip(tips, tips[1:]))
+    diameter = min(TIP_MAX * s, max(TIP_MIN * s, spacing * TIP_SPACING))
     ratios = None if state.signal is None else state.signal.ratios
     progresses = [0.0] * 4 if ratios is None else state.pinch.progress(ratios)
-    # 손끝 버튼 펼침: 손바닥 가운데(손목~중지 뿌리 가운데)와 제자리 사이 위치, 크기·불투명도도 함께(spread_motion)
     spread = spread_motion(ui["spreads"], label, state.pinch.closed, now)
     palm = ((points[WRIST][0] + points[MIDDLE_MCP][0]) / 2, (points[WRIST][1] + points[MIDDLE_MCP][1]) / 2)
 
     echo = echo_view(ui, typer, now)
-    # 손가락별 MCP → PIP → DIP → TIP → 손끝 버튼 경로(펼침 비율 적용)
     paths = [[toward(palm, points[FINGER_MCPS[f] + i], spread) for i in range(4)]
              + [toward(palm, tip_home(points, f, diameter)[0], spread)] for f in range(4)]
     draw_palm_hub(canvas, points, state, progresses, paths, spread, canvas.small,
-                  None if echo is None or echo[0] != label else echo[1:])  # 입력 표시는 입력한 손에만
-    # 손가락마다 순환 대기 글자와 손끝 버튼
+                  None if echo is None or echo[0] != label else echo[1:])
     for finger in range(4):
         queue = cycle_queue(typer, label, finger)
-        if not queue:  # 자판에 없는 자리(오른손 손등 중지~소지)
+        if not queue:
             continue
         home, direction = tip_home(points, finger, diameter)
         center = home
-        if len(queue) > 1:  # 순환 키: 대기 글자를 그리고, 올라오는 중이면 버튼 위치도 받음
+        if len(queue) > 1:
             center = draw_cycle_queue(canvas, ui, (label, finger), points, finger, queue, home, direction, diameter,
                                       palm, spread, fonts, now)
-        if spread >= 0.05:  # 거의 접힌 버튼은 그리지 않음
+        if spread >= 0.05:
             draw_tip_button(canvas, state.pinch, finger, queue[0], toward(palm, center, spread), diameter, spread,
                             progresses[finger], ratios, fonts)
     thumb, r = points[THUMB_TIP], 3 * s
-    canvas.draw.ellipse((thumb[0] - r, thumb[1] - r, thumb[0] + r, thumb[1] + r), fill=(245, 248, 252, 200))  # 엄지 점
+    canvas.draw.ellipse((thumb[0] - r, thumb[1] - r, thumb[0] + r, thumb[1] + r), fill=(245, 248, 252, 200))
     drag = typer.drag_view(label)
-    if drag is not None:  # 모음 버튼을 꼬집는 중일 때만 끌기 표시
+    if drag is not None:
         draw_vowel_drag(canvas, drag, points, diameter, fonts)
 
 
-# --- 화면 위·아래 패널 ------------------------------------------------------------------
+# --- 화면 위와 아래 ---
 
 def draw_input_line(canvas, typer, paused, now):
-    """화면 위 입력 한 줄을 그립니다. 확정 전 후보 글자 아래에 파랑 밑줄, 그 밖에는 깜빡이는 커서를 둡니다.
-    패널 아래 y를 돌려줍니다."""
+    """화면 위에 입력 한 줄을 그리고 패널 아래 y를 돌려주는 함수"""
+    # 확정 전 자음 후보 아래에는 파랑 밑줄을, 그 밖에는 깜빡이는 커서를 둠
     s, w, stroke = canvas.scale, canvas.w, canvas.stroke
     margin = 16 * s
-    text = typer.ime.text.split("\n")[-1]  # 마지막 줄만 보여 줌
+    text = typer.ime.text.split("\n")[-1]
     font = canvas.large if text else canvas.normal
-    shown = ellipsize_left(text or "손끝을 꼬집어 입력", font, min(w - 2 * margin, 420 * s) - 36 * s)  # 빈 입력이면 안내 문구
+    shown = ellipsize_left(text or "손끝을 꼬집어 입력", font, min(w - 2 * margin, 420 * s) - 36 * s)
     width = min(w - 2 * margin, max(140 * s, hud_text_width(shown, font) + 40 * s))
     height = (40 if text else 34) * s
     x1 = (w - width) / 2
-    # 선 HUD 패널: 어두운 면 + 가는 테두리, 아래 모서리에 눈금자(큰 눈금 5칸마다)
     canvas.panel((x1, margin, x1 + width, margin + height))
     count = int(width / (6 * s))
     for k in range(1, count):
@@ -404,26 +573,25 @@ def draw_input_line(canvas, typer, paused, now):
         canvas.draw.line((x, margin + height, x, margin + height - length), fill=LINE_DIM, width=stroke)
     write(canvas, (w / 2, margin + height / 2), shown, font, WHITE if text else MUTED, "mm")
     text_right = w / 2 + hud_text_width(shown, font) / 2
-    if text and typer.pending is not None and typer.pending.key != "PUNCT":  # 자음 후보: 마지막 글자 아래 파랑 밑줄
+    if text and typer.pending is not None and typer.pending.key != "PUNCT":
         last = hud_text_width(shown[-1:], font)
         canvas.glow_line(((text_right - last, margin + height - 9 * s), (text_right, margin + height - 9 * s)),
                          ACCENT, max(2, round(2 * s)))
-    elif text and int(now * 2) % 2 == 0 and not paused:  # 0.5초 간격 깜빡이는 커서
+    elif text and int(now * 2) % 2 == 0 and not paused:
         canvas.draw.line((text_right + 4 * s, margin + 12 * s, text_right + 4 * s, margin + height - 12 * s),
                          fill=MUTED, width=stroke)
     return margin + height
 
 
 def draw_cycle_row(canvas, typer, top):
-    """입력 줄 아래에 순환 중인 그룹 전체를 그리고, 지금 글자 아래에 파랑 막대를 둡니다."""
-    if typer.pending is None:  # 순환 중인 후보가 없음
+    """입력 줄 아래에 순환 중인 그룹 전체를 그리는 함수"""
+    if typer.pending is None:
         return
     s = canvas.scale
     group = [("줄" if c == "\n" else c) for c in group_of(typer.pending.key)]
-    current = (typer.pending.count - 1) % len(group)  # 지금 입력 칸에 있는 글자 위치
+    current = (typer.pending.count - 1) % len(group)
     cell = 22 * s
     x = canvas.w / 2 - len(group) * cell / 2
-    # 그룹 글자를 가운데 정렬로 늘어놓고, 지금 글자만 밝은 글자와 파랑 막대로 표시
     for i, char in enumerate(group):
         write(canvas, (x + (i + 0.5) * cell, top + cell / 2), char, canvas.normal, WHITE if i == current else DIM,
               "mm", True)
@@ -435,40 +603,37 @@ def draw_cycle_row(canvas, typer, top):
 
 
 def draw_word_panel(canvas, word, top):
-    """단어 입력 안내(--words)를 그립니다.
-    word = {"title", "detail", "tone": "prompt"|"ok"|"skip"}. 맞히면 강조 패널입니다."""
+    """단어 입력 시험의 안내 패널을 그리는 함수"""
     s, w = canvas.scale, canvas.w
     margin = 16 * s
     pw = min(w - 2 * margin, max(hud_text_width(word["title"], canvas.large),
                                  hud_text_width(word["detail"], canvas.small)) + 40 * s)
     canvas.panel(((w - pw) / 2, top, (w + pw) / 2, top + 62 * s), active=word["tone"] == "ok")
-    ink = {"ok": OK_GREEN, "skip": MUTED}.get(word["tone"], WHITE)  # 맞힘 초록, 건너뜀 회색, 안내 흰색
+    ink = {"ok": OK_GREEN, "skip": MUTED}.get(word["tone"], WHITE)
     write(canvas, (w / 2, top + 22 * s), word["title"], canvas.large, ink, "mm", True)
     write(canvas, (w / 2, top + 47 * s), word["detail"], canvas.small, MUTED, "mm", True)
 
 
 def draw_key_map(canvas, typer):
-    """화면 아래 자판 지도(K)를 그립니다. 손마다 지금 방향의 키 4개를 두고, 누르는 키는 강조합니다."""
+    """화면 아래에 손마다 지금 방향의 키 네 개를 보여 주는 자판 지도를 그리는 함수"""
     s, w, h = canvas.scale, canvas.w, canvas.h
     cell_w, cell_h, gap = 50 * s, 28 * s, 5 * s
     top = h - 16 * s - cell_h
-    # 왼손 자판은 화면 왼쪽, 오른손 자판은 오른쪽에 둠
     for hand, center in (("Left", w * 0.27), ("Right", w * 0.73)):
         state, face = typer.hands[hand], typer.face(hand) or "palm"
         start = center - (4 * cell_w + 3 * gap) / 2
         for i, key in enumerate(KEYS[(hand, face)]):
-            if key is None:  # 자판에 없는 자리(오른손 손등 중지~소지)
+            if key is None:
                 continue
             bounds = (start + i * (cell_w + gap), top, start + i * (cell_w + gap) + cell_w, top + cell_h)
             canvas.panel(bounds, active=state.pinch.active == i)
             name = key_label(key)
-            # 짧은 이름은 보통 글꼴, 긴 이름과 문장부호는 작은 글꼴
             write(canvas, ((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2), name,
                   canvas.normal if len(name) <= 3 and key != "PUNCT" else canvas.small, WHITE, "mm")
 
 
 def draw_notice(canvas, message, show_map):
-    """화면 아래 상태 안내 한 줄을 그립니다(자판 지도가 있으면 그 위)."""
+    """화면 아래에 상태 안내 한 줄을 그리는 함수"""
     s, w, h = canvas.scale, canvas.w, canvas.h
     mw = min(w - 32 * s, hud_text_width(message, canvas.small) + 28 * s)
     top = h - (92 if show_map else 58) * s
@@ -477,31 +642,29 @@ def draw_notice(canvas, message, show_map):
 
 
 def draw_help(canvas, fps):
-    """도움말(H)을 그립니다. 화면을 어둡게 덮고 HELP_LINES와 fps를 보여 줍니다."""
+    """화면을 어둡게 덮고 도움말과 fps를 그리는 함수"""
     s, w, h = canvas.scale, canvas.w, canvas.h
     canvas.draw.rectangle((0, 0, w, h), fill=(16, 17, 21, 165))
     bw = min(w - 32 * s, 470 * s)
     box = ((w - bw) / 2, 44 * s, (w + bw) / 2, h - 44 * s)
     rounded_rectangle(canvas.draw, box, 22 * s, fill=(38, 40, 47, 238), outline=(255, 255, 255, 65),
                       width=canvas.stroke)
-    # 첫 줄(제목)은 보통 글꼴 흰색, 나머지는 작은 글꼴 회색
     for i, line in enumerate(HELP_LINES + [f"{fps:.0f} FPS"]):
         write(canvas, (box[0] + 20 * s, box[1] + (20 + i * 27) * s), line, canvas.normal if i == 0 else canvas.small,
               WHITE if i == 0 else MUTED)
 
 
 def draw_hud(frame, typer, hands, ui, fonts, fps):
-    """한 프레임의 화면을 그려 BGR 프레임으로 돌려줍니다.
-    hands: {"Left"|"Right": 픽셀 좌표 21개}. ui: 화면 상태(project01.run)."""
+    """한 프레임의 화면을 그려 BGR 프레임으로 돌려주는 함수"""
+    # hands는 손마다 픽셀 좌표 21개이고, ui는 애니메이션과 안내 상태를 프레임 사이에 이어 담음
     canvas = HudCanvas(frame, fonts)
     now = time.monotonic()
     spreads = ui.setdefault("spreads", {})
-    for gone in set(spreads) - set(hands):  # 안 보이게 된 손은 다시 나타날 때 손바닥에서 펼쳐짐
+    for gone in set(spreads) - set(hands):  # 사라진 손은 다시 나타날 때 손바닥에서 펼쳐지게 함
         del spreads[gone]
-    for label, points in hands.items():  # 보이는 손마다
+    for label, points in hands.items():
         draw_hand(canvas, typer, label, points, ui, fonts, now)
 
-    # 화면 위: 입력 줄 → 순환 그룹 → 단어 안내, 화면 아래: 자판 지도
     bottom = draw_input_line(canvas, typer, ui["paused"], now)
     draw_cycle_row(canvas, typer, bottom + 8 * canvas.scale)
     if ui["show_map"]:
@@ -509,7 +672,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
     if ui.get("word") is not None:
         draw_word_panel(canvas, ui["word"], bottom + 38 * canvas.scale)
 
-    # 상태 안내 우선순위: 일시정지 > 손 없음 > 최근 2.5초 안의 알림
+    # 상태 안내는 일시정지, 손 없음, 최근 2.5초 안의 알림 순서로 하나만 보여 줌
     message = ""
     if ui["paused"]:
         message = "일시정지 · P로 재개"
@@ -517,7 +680,7 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
         message = "손바닥을 카메라 쪽으로 보여주세요"
     elif ui["notice_since"] is not None and now - ui["notice_since"] < 2.5:
         message = ui["status"]
-    if message and not ui["show_help"]:  # 도움말이 열려 있으면 안내는 그리지 않음
+    if message and not ui["show_help"]:
         draw_notice(canvas, message, ui["show_map"])
     if ui["show_help"]:
         draw_help(canvas, fps)

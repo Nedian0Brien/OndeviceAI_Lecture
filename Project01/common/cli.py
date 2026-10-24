@@ -22,7 +22,7 @@ def add_camera_arguments(parser, camera_help=None):
 
 def resolve_pipeline(args):
     """--pipeline usb를 Jetson USB 카메라용 GStreamer 문자열로 바꿉니다."""
-    from common.camera import GSTREAMER_USB
+    from common.camera import usb_pipeline
 
     if args.pipeline == "usb":  # 약칭만 바꾸고, 직접 쓴 파이프라인 문자열은 그대로 둠
-        args.pipeline = GSTREAMER_USB
+        args.pipeline = usb_pipeline()

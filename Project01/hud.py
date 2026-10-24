@@ -509,9 +509,11 @@ def draw_hud(frame, typer, hands, ui, fonts, fps):
     if ui.get("word") is not None:
         draw_word_panel(canvas, ui["word"], bottom + 38 * canvas.scale)
 
-    # 상태 안내 우선순위: 일시정지 > 손 없음 > 최근 2.5초 안의 알림
+    # 상태 안내 우선순위: 재연결 > 일시정지 > 손 없음 > 최근 2.5초 안의 알림
     message = ""
-    if ui["paused"]:
+    if ui.get("reconnecting"):
+        message = "카메라 연결 끊김 · 재연결 대기 중 · Q/ESC 종료"
+    elif ui["paused"]:
         message = "일시정지 · P로 재개"
     elif not hands:
         message = "손바닥을 카메라 쪽으로 보여주세요"

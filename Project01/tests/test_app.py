@@ -1,7 +1,9 @@
 """카메라 앱(project01.py)과 화면(hud.py)의 카메라 없이 도는 부분."""
 
+from contextlib import ExitStack
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 from hud import (CYCLE_ANIM, ECHO_HOLD, ECHO_IN, ECHO_OUT, SPREAD_CLOSE, SPREAD_HOLD, SPREAD_OPEN, cycle_motion,
                  echo_look, echo_view, finger_path_point, spread_motion)
@@ -54,6 +56,49 @@ class HudMotionTest(unittest.TestCase):
 
 
 class AppTest(unittest.TestCase):
+    def run_camera_sequence(self, reads, waiting_key=-1, closed=False):
+        import numpy as np
+        import project01
+
+        frame = np.full((120, 160, 3), 100, dtype=np.uint8)
+        capture = Mock(read=Mock(side_effect=[(frame if valid else None, gap) for valid, gap in reads]))
+        window = Mock(read_key=Mock(side_effect=[255, ord("q")]), closed=Mock(return_value=closed))
+        typer = PinchTyper()
+        typer.press_finger("Right", 0, 0.0)
+        args = SimpleNamespace(font=None, words=False, log=None, model=None, resolution="auto",
+                               camera=0, pipeline=None, detect_width=640, mirror=False)
+        with ExitStack() as stack:
+            stack.enter_context(patch.object(project01, "Camera", return_value=capture))
+            stack.enter_context(patch.object(project01, "Window", return_value=window))
+            stack.enter_context(patch.object(project01, "load_fonts"))
+            stack.enter_context(patch.object(project01, "create_detector"))
+            detector = stack.enter_context(patch.object(project01, "detect_hands", return_value=[]))
+            draw = stack.enter_context(patch.object(project01, "draw_hud", side_effect=lambda *a: a[0]))
+            stack.enter_context(patch.object(project01, "PinchTyper", return_value=typer))
+            reset = stack.enter_context(patch.object(typer, "reset", wraps=typer.reset))
+            wait = stack.enter_context(patch("cv2.waitKey", return_value=waiting_key))
+            stack.enter_context(patch("cv2.destroyAllWindows"))
+            stack.enter_context(patch("builtins.print"))
+            project01.run(args)
+        capture.release.assert_called_once()
+        self.assertEqual(typer.ime.text, "ㄱ")
+        return detector, draw, reset, wait
+
+    def test_camera_waits_then_resumes_with_hand_state_reset(self):
+        detector, draw, reset, wait = self.run_camera_sequence(
+            [(True, 0.0), (False, 0.0), (False, 0.0), (True, 30.0)])
+        self.assertEqual(detector.call_count, 2)  # 대기 프레임은 검출·입력에 넣지 않음
+        self.assertEqual(wait.call_count, 2)
+        self.assertEqual(reset.call_count, 2)  # 끊긴 직후와 복구 시 초기화
+        self.assertEqual(draw.call_count, 3)  # 대기 화면은 한 번만 그림
+        self.assertTrue(draw.call_args_list[1].args[3]["reconnecting"])
+
+    def test_camera_wait_can_be_cancelled(self):
+        for key, closed in ((ord("q"), False), (ord("Q"), False), (27, False), (-1, True)):
+            with self.subTest(key=key, closed=closed):
+                detector, _, _, _ = self.run_camera_sequence([(False, 0.0)], key, closed)
+                detector.assert_not_called()
+
     def test_facing_follows_mediapipe_label_not_position(self):
         # 카메라가 손 맞은편에 있어 오른손이 화면 왼쪽에 보여도 손바닥이면 손바닥이다.
         from common.hands import Detection, assign_hands

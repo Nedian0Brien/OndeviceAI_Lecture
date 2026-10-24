@@ -105,6 +105,13 @@ python Project01/project01.py --camera 0 --log Project01/data/free.jsonl   # 프
 | `--log 파일` | 프레임마다 손 신호·관절·입력 이벤트를 jsonl로 기록 |
 | `--words` | 단어 입력 시험. 단어를 하나씩 보여 주고, 입력 칸이 그 단어가 되면 다음 단어로 넘어간다 |
 
+실행 중 카메라 연결이 끊기면 마지막 영상에 재연결 안내를 띄우고, 캡처를 해제한 뒤 1초 간격으로 다시 엽니다.
+10초가 지나도 종료하지 않고 카메라가 돌아오기를 기다립니다. 대기 중에도 `Q`/`Esc`, 창 닫기, `Ctrl+C`로 종료할 수 있습니다.
+복구되면 입력한 글을 유지하고 손 판정 상태를 초기화합니다. 손을 편 뒤 다시 입력하세요.
+`--pipeline usb`는 시작할 때 `/dev/video0`에 대응하는 `/dev/v4l/by-id/` 경로를 우선 사용하고, 없으면 `by-path`를 사용합니다.
+이 경로가 있으면 재연결 후 `/dev/videoN` 번호가 바뀌어도 같은 카메라를 찾습니다. 둘 다 없으면 `/dev/video0`를 사용합니다.
+직접 지정한 파이프라인과 `--camera N`은 지정한 소스를 그대로 다시 엽니다. 처음 실행할 때 카메라를 열 수 없으면 오류로 종료합니다.
+
 ### 키보드 자판
 
 손 방향에 따라 키가 바뀝니다. 손바닥 자세는 손등을 책상이나 무릎에 올려 두면 편합니다.
@@ -165,7 +172,7 @@ python Project01/project01.py --camera 0 --log Project01/data/free.jsonl   # 프
 
 ```bash
 cd Project01
-python -m unittest discover -s tests -t .                # 단위 테스트 90개, 카메라 없이 실행
+python -m unittest discover -s tests -t .                # 단위 테스트, 카메라 없이 실행
 python tools/evaluate.py data/words-*.jsonl -v           # --words로 남긴 기록을 지금 판정으로 다시 재생
 ```
 
@@ -177,6 +184,7 @@ python tools/evaluate.py data/words-*.jsonl -v           # --words로 남긴 기
 | `test_tools.py` | 단어 60개 모두 기대 키 순서로 칠 수 있는지, 단어 시험 흐름, 기록 한 줄 재생, 키 순서 맞추기 |
 | `test_app.py` | 화면 애니메이션(펼침·순환·입력 표시), 손 방향 라벨, 빈 프레임에 화면 그리기 |
 | `test_common.py` | 창 닫힘, 주먹 유지, 자세·방향·기울기, 손 배정, 해상도 |
+| `test_camera.py` | 연결 끊김·반복 재연결·빈 프레임·캡처 해제·USB 고정 경로 |
 | `test_vision_session.py` | Vision Pro 판정 세션(합성 손으로 입력·주먹·모음 끌기·단어 모드·기록) |
 
 `test_app.py`의 화면 테스트는 한글 글꼴이 있어야 돌아갑니다.

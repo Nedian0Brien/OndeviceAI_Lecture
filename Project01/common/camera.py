@@ -9,6 +9,7 @@ OpenCV는 함수·메서드 안에서 import합니다.
 """
 
 import argparse
+from pathlib import Path
 import sys
 import time
 
@@ -26,6 +27,15 @@ GSTREAMER_USB = (
 # 1280x720을 씀. 저해상도 USB 카메라에 720p를 요청하면 fps가 크게 떨어지는 경우가 있어 Jetson에서는 올리지 않음
 DEFAULT_RESOLUTION = (640, 480)
 AUTO_RESOLUTION = {"darwin": (1280, 720)}
+
+
+def usb_pipeline():
+    """같은 USB 카메라를 다시 찾도록 고정 식별 경로를 우선 사용합니다."""
+    for directory in ("by-id", "by-path"):
+        for link in sorted((Path("/dev/v4l") / directory).glob("*")):
+            if link.is_symlink() and link.resolve() == Path("/dev/video0"):
+                return GSTREAMER_USB.replace("device=/dev/video0", f'device="{link}"')
+    return GSTREAMER_USB
 
 
 def parse_resolution(value):
@@ -57,36 +67,61 @@ def open_capture(camera=0, pipeline=None, size=DEFAULT_RESOLUTION):
     import cv2
 
     capture = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER) if pipeline else cv2.VideoCapture(camera)
-    if not capture.isOpened():  # 장치가 없거나 다른 앱이 쓰는 중
-        raise RuntimeError("카메라를 열 수 없습니다. --camera 또는 --pipeline 값을 확인하세요.")
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, size[0])
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, size[1])
+    try:
+        if not capture.isOpened():  # 장치가 없거나 다른 앱이 쓰는 중
+            raise RuntimeError("카메라를 열 수 없습니다. --camera 또는 --pipeline 값을 확인하세요.")
+        if not pipeline:  # GStreamer는 문자열의 해상도를 유지하고 파이프라인 재시작을 피함
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, size[0])
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, size[1])
+    except Exception:
+        capture.release()
+        raise
     return capture
 
 
-def read_frame(capture, wait=10.0):
-    """(프레임, 끊겼던 시간 초)를 돌려줍니다. 끊기지 않았으면 0입니다.
+class Camera:
+    """끊긴 캡처를 해제하고 1초 간격으로 다시 엽니다. 처음 열기 실패는 바로 알립니다.
 
-    iPhone Continuity Camera는 기기를 움직이거나 잠금을 풀면 잠시 멈춥니다. wait초까지 다시 들어오기를
-    기다리고, 그래도 없으면 RuntimeError를 냅니다.
-    끊긴 동안의 손 상태로 입력하지 않도록, 끊김이 있었으면 앱이 판정기를 초기화합니다.
+    read() → (프레임 또는 None, 끊겼던 시간 초). None이면 앱이 창 이벤트를 처리하고 다시 부릅니다.
+    재연결 대기는 시간 제한이 없고, 복구 프레임의 gap으로 앱이 손 판정기를 초기화합니다.
     """
-    import cv2
 
-    ok, frame = capture.read()
-    if ok:  # 보통의 경우: 바로 읽힘
-        return frame, 0.0
-    since = time.monotonic()
-    print("카메라 프레임이 끊겼습니다. 다시 들어오기를 기다립니다.", flush=True)
-    # 50ms 간격으로 wait초까지 다시 읽어 봄(waitKey로 창 이벤트도 처리함)
-    while time.monotonic() - since <= wait:
-        cv2.waitKey(50)
-        ok, frame = capture.read()
-        if ok:
-            gap = time.monotonic() - since
-            print(f"카메라 프레임이 다시 들어옵니다 ({gap:.1f}초 끊김).", flush=True)
+    def __init__(self, camera=0, pipeline=None, size=DEFAULT_RESOLUTION):
+        self.camera, self.pipeline, self.size = camera, pipeline, size
+        self.capture = open_capture(camera, pipeline, size)
+        self.disconnected_since = None
+        self.retry_at = 0.0
+
+    def read(self):
+        import cv2
+
+        if self.capture is None and time.monotonic() < self.retry_at:
+            return None, 0.0
+        try:
+            if self.capture is None:
+                self.capture = open_capture(self.camera, self.pipeline, self.size)
+            ok, frame = self.capture.read()
+        except (RuntimeError, OSError, cv2.error):
+            ok, frame = False, None
+        now = time.monotonic()
+        if ok and frame is not None and frame.size:
+            gap = 0.0
+            if self.disconnected_since is not None:
+                gap = max(now - self.disconnected_since, 1e-6)
+                print(f"카메라 프레임이 다시 들어옵니다 ({gap:.1f}초 끊김).", flush=True)
+                self.disconnected_since = None
             return frame, gap
-    raise RuntimeError(f"카메라 프레임을 {wait:.0f}초 동안 읽지 못했습니다. 연결/파이프라인을 확인하세요.")
+        if self.disconnected_since is None:
+            self.disconnected_since = now
+            print("카메라 연결이 끊겼습니다. 1초 간격으로 재연결합니다. (Q/ESC 종료)", flush=True)
+        self.release()
+        self.retry_at = time.monotonic() + 1.0
+        return None, 0.0
+
+    def release(self):
+        if self.capture is not None:
+            self.capture.release()
+            self.capture = None
 
 
 def window_size(w, h, min_width=960, max_width=1440, max_height=900):

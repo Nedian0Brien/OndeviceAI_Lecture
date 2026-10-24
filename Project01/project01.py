@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import time
 
-from common.camera import FpsMeter, VideoClock, Window, capture_size, open_capture, parse_resolution, read_frame
+from common.camera import Camera, FpsMeter, VideoClock, Window, capture_size, parse_resolution
 from common.canvas import load_fonts
 from common.cli import add_camera_arguments, resolve_pipeline
 from common.hands import assign_hands, create_detector, detect_hands, detection_frame
@@ -126,12 +126,30 @@ def run(args):
     try:
         with create_detector(args.model) as detector:
             size = capture_size(args.resolution)
-            capture = open_capture(args.camera, args.pipeline, size)
+            capture = Camera(args.camera, args.pipeline, size)
             window = Window(WINDOW)
             first_frame = True
+            last_frame, waiting_frame = None, None
             # 프레임 루프: 종료 단축키나 창 닫힘까지 반복
             while True:
-                frame, gap = read_frame(capture)
+                frame, gap = capture.read()
+                if frame is None:
+                    # 검출·입력·단어 시험을 멈추고 창 이벤트를 처리하면서 재연결을 기다림
+                    if waiting_frame is None:
+                        typer.reset()
+                        if last_frame is not None:
+                            waiting_ui = dict(ui, reconnecting=True, show_help=False, word=None)
+                            waiting_frame = draw_hud(last_frame, typer, {}, waiting_ui, fonts, 0.0)
+                    if waiting_frame is not None:
+                        window.show(waiting_frame)
+                    code = cv2.waitKey(50) & 0xFF
+                    if code in (27, ord("q"), ord("Q")):
+                        exit_reason = "Q/ESC 키"
+                        break
+                    if window.closed():
+                        exit_reason = "영상 창 닫힘"
+                        break
+                    continue
                 if first_frame:  # 첫 프레임에서 실제 카메라 해상도와 검출 입력 크기를 한 번 출력함
                     fh, fw = frame.shape[:2]
                     small = detection_frame(frame, args.detect_width).shape
@@ -140,6 +158,9 @@ def run(args):
                     first_frame = False
                 if gap:
                     typer.reset()  # 끊긴 동안의 손 상태로 입력하지 않음
+                    dark_since, dark_warned = None, False
+                    meter = FpsMeter()
+                    notice(f"카메라 재연결 완료 ({gap:.1f}초 끊김)")
                 now = time.monotonic()
                 fps = meter.tick(now)
                 # 검은 프레임이 2초 넘게 이어지면 한 번만 경고함. 영상이 돌아오면 경고 상태를 풂
@@ -189,6 +210,7 @@ def run(args):
                 # 화면
                 points = {role: to_pixels(hand.landmarks, w, h) for role, hand in hands.items()}
                 window.show(draw_hud(frame, typer, points, ui, fonts, fps))
+                last_frame, waiting_frame = frame, None
                 code = window.read_key()
                 key = chr(code).lower() if 0 <= code < 128 else ""  # ASCII 키만 문자로 바꿈(대소문자 무시)
 
